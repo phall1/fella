@@ -1,0 +1,32 @@
+# Zig build artifacts
+zig-out/
+.zig-cache/
+zig-cache/
+
+# Fetched dependencies (reproducible via build.zig.zon)
+zig-pkg/
+
+# Compiled objects / libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+
+# Coverage / logs
+*.log
+coverage/
