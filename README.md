@@ -1,7 +1,5 @@
 # fella
 
-> A dumb name for a serious tool.
-
 **fella** is a network identity and traffic containment framework. It rotates your system's identity artifacts, routes traffic through privacy-preserving backends, and enforces traffic containment with a configurable killswitch.
 
 ```
