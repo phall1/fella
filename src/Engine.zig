@@ -6,6 +6,7 @@ const Identity = @import("Identity.zig");
 const Tor = @import("backends/Tor.zig");
 const Killswitch = @import("Killswitch.zig");
 const Verify = @import("Verify.zig");
+const Harden = @import("Harden.zig");
 
 alloc: std.mem.Allocator,
 env: platform.Environment,
@@ -80,6 +81,9 @@ pub fn stop(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
 
     try self.tor.stop(io, alloc);
     try self.ks.disable(io, alloc);
+    Harden.revert(io, alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Harden revert failed: {any}\n", .{err});
+    };
 
     try Output.stdoutPrint(io, alloc, "[+] Stopping fella...\n", .{});
     try self.transition(.off);
@@ -143,19 +147,61 @@ pub fn verify(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
 pub fn shell(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     _ = self;
     try Output.stdoutPrint(io, alloc, "{s}[+] Dropping into fella shell{s}\n", .{ Output.Color.blue, Output.Color.reset });
-    try Output.stdoutPrint(io, alloc, "    (not yet implemented)\n", .{});
+    try Output.stdoutPrint(io, alloc, "    Type 'exit' to return\n", .{});
+
+    const pid = std.os.linux.fork();
+    if (pid == 0) {
+        const script =
+            \\#!/bin/sh
+            \\export FELLA_FAKE_RELEASE="5.15.0-generic"
+            \\export FELLA_FAKE_VERSION="#1 SMP PREEMPT_DYNAMIC"
+            \\export FELLA_FAKE_MACHINE="x86_64"
+            \\export FELLA_FAKE_SYSNAME="Linux"
+            \\export FELLA_FAKE_UPTIME="86400"
+            \\export LD_PRELOAD="/var/lib/fella/libfella.so"
+            \\exec "${SHELL:-/bin/bash}" -i
+        ;
+        const cmd = "/tmp/fella_shell.sh";
+        _ = std.os.linux.unlink(cmd);
+        var path_z: [256:0]u8 = undefined;
+        @memcpy(path_z[0..cmd.len], cmd);
+        path_z[cmd.len] = 0;
+        const fd = std.os.linux.open(&path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o700);
+        if (fd >= 0) {
+            _ = std.os.linux.write(@intCast(fd), script.ptr, script.len);
+            _ = std.os.linux.close(@intCast(fd));
+        }
+        const argv = [_:null]?[*:0]const u8{ "sh", cmd, null };
+        _ = std.os.linux.execve("/bin/sh", &argv, @ptrCast(std.c.environ));
+        std.os.linux.exit(1);
+    } else if (pid > 0) {
+        var wstatus: u32 = 0;
+        _ = std.os.linux.waitpid(@intCast(pid), &wstatus, 0);
+    } else {
+        return error.ForkFailed;
+    }
 }
 
 pub fn wipe(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     _ = self;
     try Output.stdoutPrint(io, alloc, "{s}[!] WIPING SESSION ARTIFACTS{s}\n", .{ Output.Color.red, Output.Color.reset });
+
+    const pid = std.os.linux.fork();
+    if (pid == 0) {
+        const argv = [_:null]?[*:0]const u8{ "rm", "-rf", "/var/lib/fella", null };
+        _ = std.os.linux.execve("/usr/bin/rm", &argv, @ptrCast(std.c.environ));
+        _ = std.os.linux.execve("/bin/rm", &argv, @ptrCast(std.c.environ));
+        std.os.linux.exit(1);
+    } else if (pid > 0) {
+        var wstatus: u32 = 0;
+        _ = std.os.linux.waitpid(@intCast(pid), &wstatus, 0);
+    }
+
     try Output.stdoutPrint(io, alloc, "{s}[+] Wipe complete{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
 pub fn harden(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    _ = self;
-    try Output.stdoutPrint(io, alloc, "[+] Analyzing environment...\n", .{});
-    try Output.stdoutPrint(io, alloc, "{s}[*] Container hardening applied{s}\n", .{ Output.Color.yellow, Output.Color.reset });
+    try Harden.apply(io, alloc, self.env);
 }
 
 pub fn doctor(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {

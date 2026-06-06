@@ -26,7 +26,9 @@ pub fn probe(alloc: std.mem.Allocator) !platform.Environment {
             .primary_iface = try alloc.dupe(u8, "eth0"),
             .has_sys_admin = true,
             .has_net_admin = true,
-            .can_compile_c = false,
+            .can_compile_c = std.os.linux.access("/opt/zig/zig", 0) == 0 or
+                std.os.linux.access("/usr/bin/gcc", 0) == 0 or
+                std.os.linux.access("/bin/gcc", 0) == 0,
         };
     };
 
@@ -52,6 +54,8 @@ pub fn probe(alloc: std.mem.Allocator) !platform.Environment {
         .primary_iface = try alloc.dupe(u8, "eth0"),
         .has_sys_admin = true,
         .has_net_admin = true,
-        .can_compile_c = false,
+        .can_compile_c = std.os.linux.access("/opt/zig/zig", 0) == 0 or
+            std.os.linux.access("/usr/bin/gcc", 0) == 0 or
+            std.os.linux.access("/bin/gcc", 0) == 0,
     };
 }

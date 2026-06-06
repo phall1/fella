@@ -12,7 +12,7 @@
 | **Identity Rotation** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Tor Backend** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Container Hardening** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
+| **Container Hardening** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Install/Build** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 

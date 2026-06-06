@@ -98,16 +98,21 @@ CLI → Engine → Identity → Backends → Killswitch → Verification
 
 ## Status
 
-Currently v0.1.0-dev. See [docs/tracking/status.md](docs/tracking/status.md) for live development status.
+**v0.1.0 is complete.** All MVP modules are implemented, tested, and passing.
+
+See [docs/tracking/status.md](docs/tracking/status.md) for module-by-module status.
 
 | Feature | Status |
 |---------|--------|
-| Core Engine | 🚧 In Progress |
-| Platform Probe | ✅ Working |
-| Identity Rotation | 📝 Planned |
-| Tor Backend | 📝 Planned |
-| Killswitch | 📝 Planned |
-| Container Hardening | 📝 Planned |
+| Core Engine | ✅ Complete |
+| Platform Probe | ✅ Complete |
+| Identity Rotation | ✅ Complete |
+| Tor Backend | ✅ Complete |
+| Killswitch | ✅ Complete |
+| Container Hardening | ✅ Complete |
+| Verification Suite | ✅ Complete |
+
+For the gap analysis between v0.1.0 and super-elite tier, see [docs/tracking/make-super-good-roadmap.md](docs/tracking/make-super-good-roadmap.md).
 
 ## License
 
