@@ -2,6 +2,7 @@ const std = @import("std");
 const clap = @import("clap");
 const Engine = @import("Engine.zig");
 const platform = @import("platform.zig");
+const Output = @import("Output.zig");
 
 const BANNER =
     \\   _____     __
@@ -18,26 +19,12 @@ const params = clap.parseParamsComptime(
     \\
 );
 
-fn stdoutWrite(io: std.Io, bytes: []const u8) !void {
-    try std.Io.File.writeStreamingAll(std.Io.File.stdout(), io, bytes);
-}
-
-fn stdoutPrint(io: std.Io, alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
-    const str = try std.fmt.allocPrint(alloc, fmt, args);
-    defer alloc.free(str);
-    try stdoutWrite(io, str);
-}
-
-fn stderrWrite(io: std.Io, bytes: []const u8) !void {
-    try std.Io.File.writeStreamingAll(std.Io.File.stderr(), io, bytes);
-}
-
 fn printBanner(io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "\x1b[0;34m{s}\x1b[0m\n", .{BANNER});
+    try Output.stdoutPrint(io, alloc, "{s}{s}{s}\n", .{ Output.Color.blue, BANNER, Output.Color.reset });
 }
 
-fn printHelp(io: std.Io, _: std.mem.Allocator) !void {
-    try stdoutWrite(io,
+fn printHelp(io: std.Io) !void {
+    try Output.stdoutWrite(io,
         \\
         \\Usage: fella <command>
         \\
@@ -81,17 +68,17 @@ pub fn main(init: std.process.Init) !void {
     defer res.deinit();
 
     if (res.args.help != 0) {
-        try printHelp(io, alloc);
+        try printHelp(io);
         return;
     }
 
     if (res.args.version != 0) {
-        try stdoutPrint(io, alloc, "fella 0.1.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.1.0\n", .{});
         return;
     }
 
     const cmd = res.positionals[0] orelse {
-        try printHelp(io, alloc);
+        try printHelp(io);
         std.process.exit(1);
     };
 
@@ -131,14 +118,14 @@ pub fn main(init: std.process.Init) !void {
         try printBanner(io, alloc);
         try engine.?.doctor(io, alloc);
     } else if (std.mem.eql(u8, cmd, "help")) {
-        try printHelp(io, alloc);
+        try printHelp(io);
     } else if (std.mem.eql(u8, cmd, "version")) {
-        try stdoutPrint(io, alloc, "fella 0.1.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.1.0\n", .{});
     } else {
-        try stderrWrite(io, "Unknown command: ");
-        try stderrWrite(io, cmd);
-        try stderrWrite(io, "\n");
-        try printHelp(io, alloc);
+        try Output.stderrWrite(io, "Unknown command: ");
+        try Output.stderrWrite(io, cmd);
+        try Output.stderrWrite(io, "\n");
+        try printHelp(io);
         std.process.exit(1);
     }
 }

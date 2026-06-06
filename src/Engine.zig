@@ -1,28 +1,19 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-
-const State = enum {
-    off,
-    init,
-    hardened,
-    lockdown,
-};
-
-fn stdoutPrint(io: std.Io, alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
-    const str = try std.fmt.allocPrint(alloc, fmt, args);
-    defer alloc.free(str);
-    try std.Io.File.writeStreamingAll(std.Io.File.stdout(), io, str);
-}
+const Output = @import("Output.zig");
+const State = @import("State.zig");
+const Identity = @import("Identity.zig");
 
 alloc: std.mem.Allocator,
 env: platform.Environment,
-state: State,
+state: State.State,
 
 pub fn create(alloc: std.mem.Allocator, env: platform.Environment) !@This() {
+    const saved = State.load() catch .off;
     return .{
         .alloc = alloc,
         .env = env,
-        .state = .off,
+        .state = saved,
     };
 }
 
@@ -30,81 +21,100 @@ pub fn deinit(self: *@This()) void {
     _ = self;
 }
 
+fn transition(self: *@This(), new_state: State.State) !void {
+    self.state = new_state;
+    try State.save(new_state);
+}
+
 pub fn init(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "[+] Probing environment...\n", .{});
-    try stdoutPrint(io, alloc, "    Virtualization: {s}\n", .{self.env.virt});
+    try Output.stdoutPrint(io, alloc, "[+] Probing environment...\n", .{});
+    try Output.stdoutPrint(io, alloc, "    Virtualization: {s}\n", .{self.env.virt});
     if (self.env.container_runtime) |cr| {
-        try stdoutPrint(io, alloc, "    Container:      {s}\n", .{cr});
+        try Output.stdoutPrint(io, alloc, "    Container:      {s}\n", .{cr});
     }
-    try stdoutPrint(io, alloc, "    Interface:      {s}\n", .{self.env.primary_iface});
-    try stdoutPrint(io, alloc, "    SYS_ADMIN:      {}\n", .{self.env.has_sys_admin});
-    try stdoutPrint(io, alloc, "    NET_ADMIN:      {}\n", .{self.env.has_net_admin});
-    self.state = .init;
-    try stdoutPrint(io, alloc, "\x1b[0;32m[+] fella initialized\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "    Interface:      {s}\n", .{self.env.primary_iface});
+    try Output.stdoutPrint(io, alloc, "    SYS_ADMIN:      {}\n", .{self.env.has_sys_admin});
+    try Output.stdoutPrint(io, alloc, "    NET_ADMIN:      {}\n", .{self.env.has_net_admin});
+    try self.transition(.init);
+    try Output.stdoutPrint(io, alloc, "{s}[+] fella initialized{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
 pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "[+] Starting hardened mode...\n", .{});
-    self.state = .hardened;
-    try stdoutPrint(io, alloc, "\x1b[0;32m[+] Hardened mode active\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "[+] Rotating identity...\n", .{});
+    Identity.rotate(alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Identity rotation failed: {any}\n", .{err});
+    };
+    try Output.stdoutPrint(io, alloc, "[+] Starting hardened mode...\n", .{});
+    try self.transition(.hardened);
+    try Output.stdoutPrint(io, alloc, "{s}[+] Hardened mode active{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
 pub fn lockdown(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "\x1b[0;31m[!] ENGAGING LOCKDOWN\x1b[0m\n", .{});
-    self.state = .lockdown;
-    try stdoutPrint(io, alloc, "\x1b[0;32m[+] LOCKDOWN ACTIVE\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "[+] Rotating identity...\n", .{});
+    Identity.rotate(alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Identity rotation failed: {any}\n", .{err});
+    };
+    try Output.stdoutPrint(io, alloc, "{s}[!] ENGAGING LOCKDOWN{s}\n", .{ Output.Color.red, Output.Color.reset });
+    try self.transition(.lockdown);
+    try Output.stdoutPrint(io, alloc, "{s}[+] LOCKDOWN ACTIVE{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
 pub fn stop(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "[+] Stopping fella...\n", .{});
-    self.state = .off;
-    try stdoutPrint(io, alloc, "\x1b[0;32m[+] fella stopped\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "[+] Restoring identity...\n", .{});
+    Identity.restore(alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Identity restore failed: {any}\n", .{err});
+    };
+    try Output.stdoutPrint(io, alloc, "[+] Stopping fella...\n", .{});
+    try self.transition(.off);
+    try Output.stdoutPrint(io, alloc, "{s}[+] fella stopped{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
-pub fn rotate(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "[+] Rotating...\n", .{});
-    _ = self;
-    try stdoutPrint(io, alloc, "\x1b[0;32m[+] Rotation complete\x1b[0m\n", .{});
+pub fn rotate(_: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
+    try Output.stdoutPrint(io, alloc, "[+] Rotating identity...\n", .{});
+    Identity.rotate(alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Identity rotation failed: {any}\n", .{err});
+    };
+    try Output.stdoutPrint(io, alloc, "{s}[+] Rotation complete{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
 pub fn status(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "=== fella Status ===\n", .{});
-    try stdoutPrint(io, alloc, "State: {s}\n", .{@tagName(self.state)});
+    try Output.stdoutPrint(io, alloc, "=== fella Status ===\n", .{});
+    try Output.stdoutPrint(io, alloc, "State: {s}\n", .{@tagName(self.state)});
 }
 
 pub fn verify(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "[+] Running verification...\n", .{});
     _ = self;
-    try stdoutPrint(io, alloc, "\x1b[0;34m[*] Verify complete\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "[+] Running verification...\n", .{});
+    try Output.stdoutPrint(io, alloc, "{s}[*] Verify complete{s}\n", .{ Output.Color.blue, Output.Color.reset });
 }
 
 pub fn shell(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "\x1b[0;34m[+] Dropping into fella shell\x1b[0m\n", .{});
     _ = self;
-    try stdoutPrint(io, alloc, "    (not yet implemented)\n", .{});
+    try Output.stdoutPrint(io, alloc, "{s}[+] Dropping into fella shell{s}\n", .{ Output.Color.blue, Output.Color.reset });
+    try Output.stdoutPrint(io, alloc, "    (not yet implemented)\n", .{});
 }
 
 pub fn wipe(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "\x1b[0;31m[!] WIPING SESSION ARTIFACTS\x1b[0m\n", .{});
     _ = self;
-    try stdoutPrint(io, alloc, "\x1b[0;32m[+] Wipe complete\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "{s}[!] WIPING SESSION ARTIFACTS{s}\n", .{ Output.Color.red, Output.Color.reset });
+    try Output.stdoutPrint(io, alloc, "{s}[+] Wipe complete{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
 pub fn harden(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "[+] Analyzing environment...\n", .{});
     _ = self;
-    try stdoutPrint(io, alloc, "\x1b[1;33m[*] Container hardening applied\x1b[0m\n", .{});
+    try Output.stdoutPrint(io, alloc, "[+] Analyzing environment...\n", .{});
+    try Output.stdoutPrint(io, alloc, "{s}[*] Container hardening applied{s}\n", .{ Output.Color.yellow, Output.Color.reset });
 }
 
 pub fn doctor(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try stdoutPrint(io, alloc, "=== fella Doctor ===\n", .{});
-    try stdoutPrint(io, alloc, "Environment:\n", .{});
-    try stdoutPrint(io, alloc, "  Virtualization: {s}\n", .{self.env.virt});
+    try Output.stdoutPrint(io, alloc, "=== fella Doctor ===\n", .{});
+    try Output.stdoutPrint(io, alloc, "Environment:\n", .{});
+    try Output.stdoutPrint(io, alloc, "  Virtualization: {s}\n", .{self.env.virt});
     if (self.env.container_runtime) |cr| {
-        try stdoutPrint(io, alloc, "  Container:      {s}\n", .{cr});
+        try Output.stdoutPrint(io, alloc, "  Container:      {s}\n", .{cr});
     }
-    try stdoutPrint(io, alloc, "  Interface:      {s}\n", .{self.env.primary_iface});
-    try stdoutPrint(io, alloc, "  SYS_ADMIN:      {}\n", .{self.env.has_sys_admin});
-    try stdoutPrint(io, alloc, "  NET_ADMIN:      {}\n", .{self.env.has_net_admin});
-    try stdoutPrint(io, alloc, "  Can compile C:  {}\n", .{self.env.can_compile_c});
+    try Output.stdoutPrint(io, alloc, "  Interface:      {s}\n", .{self.env.primary_iface});
+    try Output.stdoutPrint(io, alloc, "  SYS_ADMIN:      {}\n", .{self.env.has_sys_admin});
+    try Output.stdoutPrint(io, alloc, "  NET_ADMIN:      {}\n", .{self.env.has_net_admin});
+    try Output.stdoutPrint(io, alloc, "  Can compile C:  {}\n", .{self.env.can_compile_c});
 }
