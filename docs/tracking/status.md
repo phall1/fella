@@ -7,14 +7,14 @@
 
 | Module | Gate 1 Spec | Gate 2 Impl | Gate 3 Unit | Gate 4 Integ | Gate 5 E2E | Overall |
 |--------|:-----------:|:-----------:|:-----------:|:------------:|:----------:|:-------:|
-| **Core Engine** | ✅ | 🚧 | ⬜ | ⬜ | ⬜ | 🚧 |
-| **Platform Probe** | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 🚧 |
-| **Identity Rotation** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
-| **Tor Backend** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
-| **Killswitch** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
+| **Core Engine** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Platform Probe** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Identity Rotation** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Tor Backend** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Container Hardening** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
-| **Verification** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
-| **Install/Build** | ✅ | ⬜ | ⬜ | ⬜ | ⬜ | 📝 |
+| **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Install/Build** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **Legend:**
 - ✅ Complete
@@ -24,19 +24,20 @@
 
 ## Active Work
 
-### This Sprint
-- [ ] Core Engine state persistence (save/load `/var/lib/fella/state`)
-- [ ] Identity module implementation (hostname, machine-id, timezone)
-- [ ] Unit tests for Engine + Platform
+### This Sprint (Completed)
+- [x] Core Engine state persistence (save/load `/var/lib/fella/state`)
+- [x] Identity module implementation (hostname, machine-id, timezone, locale)
+- [x] Tor backend (process management, config generation, bootstrap, circuit rotation)
+- [x] Killswitch (iptables save/restore/basic/strict)
+- [x] Verification suite (IP exposure, Tor check, direct bypass)
+- [x] Integration + E2E tests
 
 ### Next Sprint
-- [ ] Tor backend (process management, config generation)
-- [ ] Killswitch (iptables save/restore/basic/strict)
-- [ ] Integration tests for identity + tor + killswitch
-
-### Backlog
+- [ ] Container hardening (proc/cpuinfo spoofing, LD_PRELOAD)
 - [ ] WireGuard backend
 - [ ] Backend chaining (VPN → Tor)
+
+### Backlog
 - [ ] Persona system
 - [ ] macOS platform support
 - [ ] Persona encryption
@@ -51,27 +52,28 @@
 
 ### Unit Tests
 ```
-Last run: not yet
-Status: N/A
+Last run: 2026-06-06
+Status: PASS
 ```
 
 ### Integration Tests
 ```
-Last run: not yet
-Status: N/A
+Last run: 2026-06-06
+Status: 3/3 PASS
 ```
 
 ### E2E Tests
 ```
-Last run: not yet
-Status: N/A
+Last run: 2026-06-06
+Status: 1/1 PASS
 ```
 
 ## Release Target
 
-**v0.1.0 MVP** — Target date: TBD
-- init/start/stop/rotate
-- Tor backend with basic killswitch
+**v0.1.0 MVP** — Ready for release
+- init/start/stop/rotate/lockdown/status/verify/doctor
+- Tor backend with basic/strict killswitch
 - Linux x86_64 + aarch64
-- Identity rotation
-- Verification suite
+- Identity rotation (hostname, machine-id, timezone, locale)
+- Verification suite (Tor confirmation, IP exposure, direct bypass)
+- Real integration + E2E tests

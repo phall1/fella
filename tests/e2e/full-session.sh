@@ -29,52 +29,52 @@ ORIG_MID=$(cat /etc/machine-id 2>/dev/null || echo "NONE")
 
 echo "      Original: host=$ORIG_HOST machine-id=$ORIG_MID"
 
+# Clean state
+sudo pkill -9 tor 2>/dev/null || true
+sudo rm -f /var/lib/fella/tor.pid
+sleep 1
+
 # Step 1: Init
 $FELLA init > /dev/null 2>&1
 echo "      Step 1: init ✓"
 
 # Step 2: Start (identity + tor + basic killswitch)
-# STUB: Uncomment when modules ready
-# $FELLA start > /dev/null 2>&1
-# echo "      Step 2: start ✓"
+$FELLA start > /dev/null 2>&1
+echo "      Step 2: start ✓"
 
 # Step 3: Verify traffic goes through Tor
-# STUB
-# IP=$(proxychains4 curl -s --max-time 15 https://checkip.amazonaws.com)
-# TOR_CHECK=$(proxychains4 curl -s --max-time 15 https://check.torproject.org/api/ip)
-# if echo "$TOR_CHECK" | grep -q 'IsTor.*true'; then
-#     echo "      Step 3: tor routing verified ✓ (IP: $IP)"
-# else
-#     echo "      Step 3: FAIL - not routing through Tor"
-#     $FELLA stop > /dev/null 2>&1 || true
-#     exit 1
-# fi
+IP=$(proxychains4 curl -s --max-time 15 https://checkip.amazonaws.com 2>/dev/null || echo "TIMEOUT")
+TOR_CHECK=$(proxychains4 curl -s --max-time 15 https://check.torproject.org/api/ip 2>/dev/null || echo "TIMEOUT")
+if echo "$TOR_CHECK" | grep -q 'IsTor.*true'; then
+    echo "      Step 3: tor routing verified ✓ (IP: $IP)"
+else
+    echo "      Step 3: FAIL - not routing through Tor (response: $TOR_CHECK)"
+    $FELLA stop > /dev/null 2>&1 || true
+    exit 1
+fi
 
 # Step 4: Rotate
-# STUB
-# $FELLA rotate > /dev/null 2>&1
-# NEW_HOST=$(hostname)
-# if [[ "$ORIG_HOST" != "$NEW_HOST" ]]; then
-#     echo "      Step 4: rotation verified ✓ (new host: $NEW_HOST)"
-# else
-#     echo "      Step 4: FAIL - hostname did not change"
-#     $FELLA stop > /dev/null 2>&1 || true
-#     exit 1
-# fi
+$FELLA rotate > /dev/null 2>&1
+NEW_HOST=$(hostname)
+if [[ "$ORIG_HOST" != "$NEW_HOST" ]]; then
+    echo "      Step 4: rotation verified ✓ (new host: $NEW_HOST)"
+else
+    echo "      Step 4: FAIL - hostname did not change"
+    $FELLA stop > /dev/null 2>&1 || true
+    exit 1
+fi
 
 # Step 5: Stop
-# STUB
-# $FELLA stop > /dev/null 2>&1
-# echo "      Step 5: stop ✓"
+$FELLA stop > /dev/null 2>&1
+echo "      Step 5: stop ✓"
 
 # Step 6: Verify restoration
-# STUB
-# FINAL_HOST=$(hostname)
-# if [[ "$ORIG_HOST" == "$FINAL_HOST" ]]; then
-#     echo "      Step 6: restoration verified ✓"
-# else
-#     echo "      Step 6: FAIL - hostname not restored"
-#     exit 1
-# fi
+FINAL_HOST=$(hostname)
+if [[ "$ORIG_HOST" == "$FINAL_HOST" ]]; then
+    echo "      Step 6: restoration verified ✓"
+else
+    echo "      Step 6: FAIL - hostname not restored"
+    exit 1
+fi
 
-echo "      SKIPPED: E2E session test needs start/stop/rotate modules"
+echo "      All E2E checks passed"
