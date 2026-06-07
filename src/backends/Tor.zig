@@ -114,7 +114,7 @@ pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc, "    [+] Tor running on 127.0.0.1:9050\n", .{});
 }
 
-pub fn isRunning(_: *@This()) bool {
+pub fn isRunning(_: *const @This()) bool {
     return checkBootstrap();
 }
 

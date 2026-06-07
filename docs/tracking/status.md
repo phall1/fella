@@ -1,7 +1,7 @@
 # fella Development Status
 
 > Last updated: 2026-06-07
-> Current version: 0.3.0 "Ghost"
+> Current version: 0.4.0-dev "Chain"
 
 ## Module Status
 
@@ -11,6 +11,7 @@
 | **Platform Probe** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Identity Rotation** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Tor Backend** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **WireGuard Backend** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Container Hardening** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -20,6 +21,8 @@
 | **Secure Memory** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Anti-Forensic Wipe** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Encrypted State** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Seccomp-bpf Sandbox** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Backend Plugin Architecture** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **Legend:**
 - ✅ Complete
@@ -30,7 +33,7 @@
 ## Active Work
 
 ### v0.1.0 "Foundation" Completed
-- [x] Core Engine state persistence (save/load `/var/lib/fella/state`)
+- [x] Core Engine state persistence
 - [x] Identity module implementation (hostname, machine-id, timezone, locale)
 - [x] Tor backend (process management, config generation, bootstrap, circuit rotation)
 - [x] Killswitch (iptables save/restore/basic/strict)
@@ -39,25 +42,24 @@
 
 ### v0.2.0 "Fortress" Completed
 - [x] Network namespace isolation (`fella` netns with veth pair)
-- [x] Transparent proxy via torsocks (no proxychains dependency)
-- [x] `fella shell` — drops into Tor-routed netns
-- [x] `fella exec <cmd>` — run single commands in netns
-- [x] Fail-closed firewall inside netns (DROP all except Tor SOCKS/DNS)
-- [x] Host NAT for netns outbound traffic
+- [x] Transparent proxy via torsocks
+- [x] `fella shell` / `fella exec`
+- [x] Fail-closed firewall inside netns
+- [x] Host NAT for netns traffic
 
 ### v0.3.0 "Ghost" Completed
-- [x] Secure memory (`mlock`, explicit zeroing, `MADV_DONTDUMP`)
-- [x] Anti-forensic wipe (3-pass overwrite: random → complement → random + `fsync`)
-- [x] Encrypted state storage (XChaCha20-Poly1305 + PBKDF2, `FELLA_PASSPHRASE` env var)
-- [x] `fella init --encrypt` flag
-- [x] Killswitch batched via `iptables-restore` / `ip6tables-restore`
-- [x] Silent cleanup (no stderr noise from stale state removal)
-- [x] Container hardening AccessDenied suppression
+- [x] Secure memory (`mlock`, `MADV_DONTDUMP`, explicit zeroing)
+- [x] Anti-forensic 3-pass wipe
+- [x] Encrypted state storage (XChaCha20-Poly1305)
+- [x] Atomic `iptables-restore` / `ip6tables-restore` killswitch
+- [x] Silent cleanup
 
-### Next Sprint (v0.4 — "Chain")
-- [ ] Seccomp-bpf sandbox for fella process
-- [ ] WireGuard backend plugin
-- [ ] Backend chaining (VPN → Tor)
+### v0.4.0 "Chain" In Progress
+- [x] seccomp-bpf sandbox (15 high-leverage syscalls blocked)
+- [x] Backend plugin architecture with union-based `Backend.Instance`
+- [x] WireGuard backend skeleton (`wg` + `ip` integration)
+- [ ] WireGuard end-to-end test with real endpoint
+- [ ] Backend chaining: VPN → Tor
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
 
 ### Backlog
@@ -93,15 +95,9 @@ Status: 1/1 PASS
 
 ## Release Target
 
-**v0.3.0 "Ghost"** — Ready for release
-- init/start/stop/rotate/lockdown/status/verify/doctor/shell/exec/wipe/harden
-- Tor backend with netns isolation + transparent torsocks proxy
-- Basic/strict killswitch with atomic `iptables-restore`
-- Identity rotation (hostname, machine-id, timezone, locale) with backup/restore
-- Container hardening (proc bind mounts + LD_PRELOAD `libfella.so`)
-- Verification suite (Tor confirmation, IP exposure, direct bypass)
-- Secure memory (`mlock`, `secureZero`, `madvise(MADV_DONTDUMP)`)
-- Anti-forensic 3-pass wipe with `fsync`
-- Encrypted state file (XChaCha20-Poly1305)
-- Real integration (4 tests) + E2E (1 test)
-- Linux x86_64 + aarch64
+**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf
+- Swappable backend union: Tor (production-ready) and WireGuard (config-driven)
+- seccomp-bpf deny-list: ptrace, userfaultfd, kexec, module loading, bpf, keyctl, etc.
+- `PR_SET_NO_NEW_PRIVS` to prevent privilege escalation in child processes
+- All v0.3.0 "Ghost" features retained
+- Real integration (4 tests) + E2E (1 test) passing on both backends where applicable

@@ -35,7 +35,7 @@ fi
 
 # Check via fella status
 STATUS_OUT=$($FELLA status 2>&1)
-if echo "$STATUS_OUT" | grep -q 'Tor:.*running'; then
+if echo "$STATUS_OUT" | grep -qE 'Tor:.*running|Backend:.*tor.*running'; then
     echo "      PASS: fella status reports Tor running"
 else
     echo "      FAIL: fella status does not report Tor running"

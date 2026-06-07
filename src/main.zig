@@ -3,6 +3,7 @@ const clap = @import("clap");
 const Engine = @import("Engine.zig");
 const platform = @import("platform.zig");
 const Output = @import("Output.zig");
+const Backend = @import("backends/Backend.zig");
 
 const BANNER =
     \\   _____     __
@@ -16,6 +17,7 @@ const params = clap.parseParamsComptime(
     \\-h, --help      Display this help and exit.
     \\-v, --version    Display version and exit.
     \\--encrypt       Encrypt state file (init only)
+    \\--backend <str> Backend: tor | wireguard (default: tor)
     \\<str>
     \\
 );
@@ -33,7 +35,8 @@ fn printHelp(io: std.Io) !void {
         \\Commands:
         \\  init             First-time setup, probe environment
         \\  init --encrypt   Enable encrypted state storage (or: --encrypt init)
-        \\  start            Activate identity + tor + basic killswitch
+        \\  init --backend wireguard   Select WireGuard backend
+        \\  start            Activate identity + backend + basic killswitch
         \\  lockdown         Full strict mode (tor-only traffic)
         \\  stop             Deactivate everything, restore system
         \\  rotate           New identity + new tor circuit
@@ -98,10 +101,17 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "init")) {
         try printBanner(io, alloc);
         var encrypt = res.args.encrypt != 0;
+        var backend_kind: Backend.Kind = .tor;
+        if (res.args.backend) |b| {
+            backend_kind = parseBackend(b);
+        }
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "--encrypt")) encrypt = true;
+            if (std.mem.eql(u8, arg, "--backend")) {
+                if (iter.next()) |b| backend_kind = parseBackend(b);
+            }
         }
-        try engine.?.init(io, alloc, encrypt);
+        try engine.?.init(io, alloc, encrypt, backend_kind);
     } else if (std.mem.eql(u8, cmd, "start")) {
         try printBanner(io, alloc);
         try engine.?.start(io, alloc);
@@ -147,6 +157,11 @@ pub fn main(init: std.process.Init) !void {
         try printHelp(io);
         std.process.exit(1);
     }
+}
+
+fn parseBackend(s: []const u8) Backend.Kind {
+    if (std.mem.eql(u8, s, "wireguard")) return .wireguard;
+    return .tor;
 }
 
 fn needsEnv(cmd: []const u8) bool {
