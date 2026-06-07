@@ -56,6 +56,19 @@ fn loadBridges(alloc: std.mem.Allocator) ![]u8 {
     return try alloc.dupe(u8, buf[0..n]);
 }
 
+test "detectMode falls back to direct without binaries" {
+    // In this test environment obfs4proxy/snowflake-client are unlikely installed.
+    try std.testing.expectEqual(Mode.direct, detectMode());
+}
+
+test "loadBridges falls back to default" {
+    const alloc = std.testing.allocator;
+    const bridges = try loadBridges(alloc);
+    defer alloc.free(bridges);
+    try std.testing.expect(bridges.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, bridges, "Bridge obfs4") != null);
+}
+
 fn hasBinary(name: []const u8) bool {
     const prefixes = [_][]const u8{ "/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/" };
     var buf: [128:0]u8 = undefined;

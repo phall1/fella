@@ -77,7 +77,9 @@ pub fn stop(io: std.Io, alloc: std.mem.Allocator, kind: Kind) !void {
 pub fn stopAll(io: std.Io, alloc: std.mem.Allocator) void {
     inline for (std.meta.fields(Kind)) |field| {
         const kind: Kind = @enumFromInt(field.value);
-        stop(io, alloc, kind) catch {};
+        stop(io, alloc, kind) catch |err| {
+            _ = Output.stdoutPrint(io, alloc, "    [!] Could not stop subagent {s}: {any}\n", .{ @tagName(kind), err }) catch {};
+        };
     }
 }
 

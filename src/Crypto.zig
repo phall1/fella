@@ -71,3 +71,39 @@ pub fn decrypt(alloc: std.mem.Allocator, ciphertext: []const u8, password: []con
     try XChaCha20Poly1305.decrypt(out, ct, tag.*, "", nonce.*, key);
     return out;
 }
+
+test "encrypt/decrypt round-trip" {
+    const alloc = std.testing.allocator;
+    const plain = "hello nation state";
+    const pass = "correct horse battery staple";
+
+    const enc = try encrypt(alloc, plain, pass);
+    defer alloc.free(enc);
+
+    const dec = try decrypt(alloc, enc, pass);
+    defer alloc.free(dec);
+
+    try std.testing.expectEqualStrings(plain, dec);
+}
+
+test "deriveKey is deterministic with same salt" {
+    var salt: [SALT_LEN]u8 = undefined;
+    @memset(&salt, 0xAB);
+
+    const key1 = try deriveKey("password", salt);
+    const key2 = try deriveKey("password", salt);
+    try std.testing.expectEqual(key1, key2);
+}
+
+test "deriveKey differs with different passwords" {
+    var salt: [SALT_LEN]u8 = undefined;
+    @memset(&salt, 0xAB);
+
+    const key1 = try deriveKey("password1", salt);
+    const key2 = try deriveKey("password2", salt);
+    var same: bool = true;
+    for (key1, key2) |a, b| {
+        if (a != b) same = false;
+    }
+    try std.testing.expect(!same);
+}

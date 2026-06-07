@@ -25,3 +25,9 @@ pub fn isEncrypted(data: []const u8) bool {
     if (data.len < 8) return false;
     return std.mem.eql(u8, data[0..8], "FELLAENC");
 }
+
+test "isEncrypted detects magic" {
+    try std.testing.expect(isEncrypted("FELLAENCdeadbeef"));
+    try std.testing.expect(!isEncrypted("plain text"));
+    try std.testing.expect(!isEncrypted("FELLA"));
+}

@@ -45,7 +45,9 @@ pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     try runCmd(alloc, &.{ "ip", "netns", "exec", NS_NAME, "ip", "link", "set", IFACE, "up" });
 
     // Add routes through the tunnel
-    runCmd(alloc, &.{ "ip", "netns", "exec", NS_NAME, "ip", "route", "add", "default", "dev", IFACE }) catch {};
+    runCmd(alloc, &.{ "ip", "netns", "exec", NS_NAME, "ip", "route", "add", "default", "dev", IFACE }) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Could not add default route in netns: {any}\n", .{err});
+    };
 
     self.status = .running;
     try Output.stdoutPrint(io, alloc, "    [+] WireGuard interface {s} up in namespace {s}\n", .{ IFACE, NS_NAME });
@@ -56,7 +58,9 @@ pub fn stop(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
         try Output.stdoutPrint(io, alloc, "[*] WireGuard not running\n", .{});
         return;
     }
-    _ = runCmd(alloc, &.{ "ip", "netns", "exec", NS_NAME, "ip", "link", "del", IFACE }) catch {};
+    _ = runCmd(alloc, &.{ "ip", "netns", "exec", NS_NAME, "ip", "link", "del", IFACE }) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Could not delete wg interface: {any}\n", .{err});
+    };
     self.status = .stopped;
     try Output.stdoutPrint(io, alloc, "    [+] WireGuard stopped\n", .{});
 }

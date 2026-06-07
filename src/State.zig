@@ -61,3 +61,21 @@ pub fn save(s: State) !void {
     const data = std.fmt.bufPrint(&buf, "{s}\n", .{text}) catch text;
     try saveRaw(data);
 }
+
+test "serialize round-trip" {
+    try std.testing.expectEqualStrings("off", serialize(.off));
+    try std.testing.expectEqualStrings("init", serialize(.init));
+    try std.testing.expectEqualStrings("hardened", serialize(.hardened));
+    try std.testing.expectEqualStrings("lockdown", serialize(.lockdown));
+}
+
+test "parse round-trip" {
+    try std.testing.expectEqual(State.off, parse("off"));
+    try std.testing.expectEqual(State.init, parse("init"));
+    try std.testing.expectEqual(State.hardened, parse("hardened\n"));
+    try std.testing.expectEqual(State.lockdown, parse("  lockdown  "));
+}
+
+test "parse defaults to off on unknown" {
+    try std.testing.expectEqual(State.off, parse("garbage"));
+}

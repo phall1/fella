@@ -2,11 +2,11 @@
 
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-orange.svg)](https://ziglang.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20x86__64%20%7C%20aarch64-blue.svg)](https://kernel.org/)
-[![Tests](https://img.shields.io/badge/tests-5%2F5%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-6%2F6%20passing-brightgreen.svg)](#testing)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> **A nation-state tier network identity and traffic containment framework.**  
-> Written in Zig. Zero shell dependency. Real integration tests. No bullshit.
+> **A network identity and traffic containment framework for hostile networks.**  
+> Written in Zig. Zero shell dependency. Real integration tests.
 
 ```
    _____     __
@@ -34,17 +34,15 @@ Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 |-------|---------|
 | 🎭 **Identity** | Rotates hostname, machine-id, timezone, locale, MAC addresses, bash history per session |
 | 🔒 **Containment** | Dedicated `fella` network namespace with veth pair to host |
-| 🎭 **Masquerade** | Renames fella process to common systemd service names in `ps`/`top` |
-| 💾 **Ephemeral** | `--ephemeral` mounts `/var/lib/fella` as tmpfs; pull the plug, evidence vanishes |
 | 🌐 **Routing** | Tor (SOCKS5 + DNS + ControlPort), WireGuard, or chained backends |
 | ⛔ **Killswitch** | `iptables-restore` / `ip6tables-restore` atomic ruleset; basic or strict mode |
 | 🛡️ **Sandbox** | seccomp-bpf deny-list blocks 15+ dangerous syscalls |
 | 🧬 **Hardening** | Container fingerprint spoofing via `/proc` bind-mounts + LD_PRELOAD `libfella.so` |
 | 🧹 **Wipe** | 3-pass overwrite (random → complement → random) + `fsync` for session artifacts |
 | 🔗 **Chain** | VPN → Tor chaining (`--backend chain`) for nested tunneling |
-| 🎲 **Padding** | Constant-rate traffic padding (fixed-size packets every 100ms) through the tunnel |
+| 🎲 **Padding** | Traffic padding subagent emits fixed-size noise through the tunnel to frustrate timing analysis |
 | 🌉 **Bridges** | Auto-detects obfs4 / snowflake transports for censored networks |
-| 🎭 **Masquerade** | Renames fella to common systemd processes in `ps` / `top` |
+| 🎭 **Masquerade** | Renames fella to common systemd process names in `ps` / `top` (casual obfuscation) |
 | 💾 **Ephemeral** | `--ephemeral` mounts `/var/lib/fella` as tmpfs; evidence evaporates on power loss |
 | 🔐 **Crypto** | XChaCha20-Poly1305 encrypted state via `init --encrypt` |
 | ✅ **Verify** | Tor confirmation, IP exposure, direct bypass leak tests |
@@ -64,7 +62,8 @@ sudo ./zig-out/bin/fella init --backend chain       # VPN -> Tor, requires wireg
 
 # Activate
 sudo ./zig-out/bin/fella start                      # identity + backend + netns + killswitch + seccomp
-sudo ./zig-out/bin/fella start --cover              # ...plus decoy traffic padding
+sudo ./zig-out/bin/fella start --cover              # ...plus traffic padding noise
+sudo ./zig-out/bin/fella start --ephemeral          # ...with RAM-only session state
 
 # Use
 sudo ./zig-out/bin/fella shell          # drop into routed subshell
@@ -151,13 +150,13 @@ fella init                  Probe environment, first-time setup
 fella init --encrypt        Enable encrypted state storage
 fella init --backend <k>    Select backend: tor | wireguard | chain
 fella start                 Activate identity + backend + containment
-fella start --cover         Enable cover traffic padding
+fella start --cover         Enable traffic padding noise
 fella start --ephemeral     RAM-only session data (tmpfs)
 fella lockdown              Strict killswitch (backend-only traffic)
-fella lockdown --cover      Strict mode with cover traffic
+fella lockdown --cover      Strict mode with traffic padding
 fella lockdown --ephemeral  Strict mode with RAM-only data
-fella cover start           Start cover traffic daemon
-fella cover stop            Stop cover traffic daemon
+fella cover start           Start padding subagent
+fella cover stop            Stop padding subagent
 fella macrotate start       Start periodic MAC rotation subagent
 fella macrotate stop        Stop MAC rotation subagent
 fella stop                  Deactivate everything, restore system
@@ -256,9 +255,11 @@ The chain path is:
 netns app → torsocks → Tor SOCKS (host) → Tor outbound bound to WG IP → WireGuard tunnel
 ```
 
-### Constant-Rate Traffic Padding
+### Traffic Padding
 
-Tor alone does not hide *when* you send traffic or *how much*. A nation-state passive adversary can correlate bursts entering and exiting the Tor network. fella runs a background subagent that emits fixed-size HTTP POSTs through the tunnel at a fixed 100ms interval. This pads the tunnel with constant-rate noise, making size/timing correlation significantly harder.
+Tor alone does not hide *when* you send traffic or *how much*. A nation-state passive adversary can correlate bursts entering and exiting the Tor network. fella runs a background subagent that emits fixed-size HTTP POSTs through the tunnel at a fixed 100ms interval. This adds noise to the tunnel stream, making size/timing correlation harder.
+
+> **Honest caveat:** This is *padding noise*, not mathematically constant-rate traffic shaping. A sophisticated adversary can still distinguish real bursts from padding if they have enough vantage points. For true constant-rate shaping you need application-level control of the Tor circuit itself.
 
 ```bash
 sudo ./zig-out/bin/fella start --cover
@@ -287,6 +288,26 @@ sudo cp my-bridges.conf /var/lib/fella/bridges.conf
 sudo fella start
 ```
 
+## Operational Security Notes
+
+### Ephemeral Mode
+
+```bash
+sudo fella start --ephemeral
+```
+
+This mounts `/var/lib/fella` as a **tmpfs**. Every byte of session state — identity backups, Tor data, configs, keys, state file — lives in RAM only. Pull the plug or unmount, and it evaporates. This is the mode you want if physical seizure is in your threat model.
+
+### Process Masquerade
+
+On every `start`/`lockdown`, fella renames its own process to something boring like `systemd-resolve`, `systemd-network`, or `dbus-daemon`. `ps`, `top`, and `/proc/<pid>/comm` show the fake name.
+
+> **Honest caveat:** This is *casual obfuscation*, not forensic resistance. `/proc/<pid>/exe` and `/proc/<pid>/cmdline` still reveal the real binary path. It helps against shoulder-surfing sysadmins, not a determined investigator.
+
+### MAC Address Rotation
+
+fella randomizes the MAC address of both the primary host interface and the `veth-fella-host` pair on every start/rotate. Original MACs are saved to `/var/lib/fella/original/mac/` and restored on `stop`. This breaks L2 tracking, DHCP fingerprinting, and router logging correlation.
+
 ## Security Model
 
 1. **Assume the host network is hostile** — all application traffic is forced through the backend namespace.
@@ -311,11 +332,12 @@ sudo ./scripts/validate.sh --all
 
 | Suite | Tests | Status |
 |-------|-------|--------|
-| Unit | — | ✅ PASS |
+| Unit | Crypto, State, Transport, MAC, Passphrase | ✅ PASS |
 | Identity Rotation | hostname rotate + restore | ✅ PASS |
 | Tor Backend | daemon lifecycle, SOCKS, status | ✅ PASS |
-| Netns Shell | traffic routes through Tor | ✅ PASS |
+| Netns Routing | traffic routes through Tor via `fella exec` | ✅ PASS |
 | Platform Probe | SYS_ADMIN / NET_ADMIN detection | ✅ PASS |
+| WireGuard Backend | backend persistence + graceful config failures | ✅ PASS |
 | E2E Full Session | init → start → verify → rotate → stop | ✅ PASS |
 
 ## Roadmap
@@ -331,8 +353,15 @@ sudo ./scripts/validate.sh --all
 - [x] seccomp-bpf sandbox
 - [x] Backend plugin architecture (Tor, WireGuard, Chain)
 - [x] Backend chaining: VPN → Tor (`--backend chain`)
-- [x] Cover traffic padding (`start --cover`, `fella cover start|stop`)
+- [x] Traffic padding subagent (`start --cover`, `fella cover start|stop`)
+- [x] Censorship bridges (obfs4 / snowflake auto-detection)
+- [x] Process masquerade + MAC rotation + ephemeral tmpfs mode
+- [x] Formal threat model document
+
+### v0.5 — "Browser"
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
+- [ ] WireGuard real-endpoint integration test
+- [ ] Chain backend real-endpoint integration test
 
 See [docs/tracking/status.md](docs/tracking/status.md) and [docs/tracking/nation-state-roadmap.md](docs/tracking/nation-state-roadmap.md) for the full gap analysis.
 
@@ -354,24 +383,6 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for module lifecycle, acceptance criteria, 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-## Warning
-
-### Ephemeral Mode
-
-```bash
-sudo fella start --ephemeral
-```
-
-This mounts `/var/lib/fella` as a **tmpfs**. Every byte of session state — identity backups, Tor data, configs, keys, state file — lives in RAM only. Pull the plug or unmount, and it evaporates. This is the mode you want if physical seizure is in your threat model.
-
-### Process Masquerade
-
-On every `start`/`lockdown`, fella renames its own process to something boring like `systemd-resolve`, `systemd-network`, or `dbus-daemon`. `ps`, `top`, and `/proc/<pid>/comm` show the fake name. Cheap obfuscation against process-targeted attacks.
-
-### MAC Address Rotation
-
-fella randomizes the MAC address of both the primary host interface and the `veth-fella-host` pair on every start/rotate. This breaks L2 tracking, DHCP fingerprinting, and router logging correlation.
 
 ## Warning
 

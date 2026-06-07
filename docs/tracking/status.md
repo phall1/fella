@@ -11,14 +11,14 @@
 | **Platform Probe** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Identity Rotation** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Tor Backend** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **WireGuard Backend** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **WireGuard Backend** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
 | **Chain Backend (VPN→Tor)** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **Constant-Rate Padding** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **Censorship Bridges (obfs4/snowflake)** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **MAC Rotation** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **Process Masquerade** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **Ephemeral Mode** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **Subagent System** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Traffic Padding** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| **Censorship Bridges (obfs4/snowflake)** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| **MAC Rotation** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| **Process Masquerade** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| **Ephemeral Mode** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| **Subagent System** | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
 | **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Container Hardening** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -66,20 +66,22 @@
 - [x] Backend plugin architecture with union-based `Backend.Instance`
 - [x] WireGuard backend skeleton (`wg` + `ip` integration)
 - [x] Chain backend: VPN → Tor nested tunneling
-- [x] Constant-rate traffic padding daemon (fixed-size packets every 100ms)
+- [x] Traffic padding subagent (fixed-size HTTP POSTs every 100ms)
 - [x] Auto-detect obfs4 / snowflake bridges for censored networks
 - [x] Subagent system for netns-side background tasks
-- [x] MAC address rotation for host interface and veth pair
+- [x] MAC address rotation for host interface and veth pair (with save/restore)
 - [x] Process masquerade (`prctl(PR_SET_NAME)`) to common systemd names
 - [x] Ephemeral mode: tmpfs-backed `/var/lib/fella` for RAM-only sessions
 - [x] `Makefile` with `install` / `uninstall` / `test` / `validate`
 - [x] `scripts/install.sh` with `--auto` dependency + Zig installation
+- [x] Formal threat model document (`docs/THREAT_MODEL.md`)
+- [x] Unit tests for Crypto, State, Transport, MAC, Passphrase
+- [x] WireGuard backend selection integration test
 
 ### Next Sprint (v0.5 — "Browser")
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
 - [ ] WireGuard real-endpoint integration test
 - [ ] Chain backend real-endpoint integration test
-- [ ] Threat model validation checklist
 
 ### Backlog
 - [ ] macOS platform support
@@ -98,12 +100,13 @@
 ```
 Last run: 2026-06-07
 Status: PASS
+Modules: Crypto, State, Transport, MAC, Passphrase
 ```
 
 ### Integration Tests
 ```
 Last run: 2026-06-07
-Status: 4/4 PASS
+Status: 5/5 PASS
 ```
 
 ### E2E Tests
@@ -114,15 +117,18 @@ Status: 1/1 PASS
 
 ## Release Target
 
-**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf + cover traffic + install + obfuscation
+**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf + traffic padding + install + obfuscation
 - Swappable backends: Tor, WireGuard, Chain (VPN→Tor)
 - seccomp-bpf deny-list: ptrace, userfaultfd, kexec, module loading, bpf, keyctl, etc.
 - `PR_SET_NO_NEW_PRIVS` to prevent privilege escalation in child processes
-- Cover traffic daemon with decoy URL fetches through the tunnel
-- Subagent framework for netns-side background tasks (cover, MAC rotate)
-- MAC address randomization on host interface + veth pair per session/rotation
+- Traffic padding subagent with fixed-size HTTP POSTs through the tunnel
+- Subagent framework for netns-side background tasks (padding, MAC rotate)
+- MAC address randomization on host interface + veth pair with original save/restore
 - Process masquerade to common systemd service names
 - Ephemeral mode: tmpfs mount for `/var/lib/fella` makes all session data RAM-only
+- Censorship bridge support: auto-detects obfs4 / snowflake and injects bridge lines
 - `make` / `make install` / `make uninstall` / `make validate-all`
 - `scripts/install.sh --auto` installs system deps and Zig automatically
-- Real integration (4 tests) + E2E (1 test) passing on Tor backend
+- Formal threat model documenting capabilities and explicit gaps
+- Unit tests for Crypto, State, Transport, MAC, Passphrase
+- Real integration (5 tests) + E2E (1 test) passing on Tor backend

@@ -2,10 +2,12 @@ const std = @import("std");
 const Output = @import("Output.zig");
 
 const IFNAMSIZ = 16;
+const SIOCGIFHWADDR = 0x8927;
 const SIOCSIFHWADDR = 0x8924;
 const ARPHRD_ETHER = 1;
 
 const VETH_HOST = "veth-fella-host";
+const SAVE_DIR = "/var/lib/fella/original/mac";
 
 const ifreq = extern struct {
     name: [IFNAMSIZ:0]u8,
@@ -19,6 +21,9 @@ const sockaddr = extern struct {
 
 pub fn rotateHost(io: std.Io, alloc: std.mem.Allocator, iface: []const u8) !void {
     if (iface.len == 0 or iface.len >= IFNAMSIZ) return;
+    saveOriginal(iface) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Could not save original MAC for {s}: {any}\n", .{ iface, err });
+    };
     const mac = randomMac();
     try setHwaddr(iface, mac);
     try Output.stdoutPrint(io, alloc, "    [*] MAC rotated on {s}: {s}\n", .{ iface, fmtMac(mac) });
@@ -31,10 +36,15 @@ pub fn rotateVethHost(io: std.Io, alloc: std.mem.Allocator) !void {
 }
 
 pub fn restoreHost(io: std.Io, alloc: std.mem.Allocator, iface: []const u8) !void {
-    // Best-effort: we don't save original MACs. The host admin or DHCP
-    // can restore them; this just prints a note.
-    try Output.stdoutPrint(io, alloc, "    [*] Host MAC restoration skipped (use ifconfig or reboot)\n", .{});
-    _ = iface;
+    const saved = loadOriginal(iface) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [*] No saved MAC for {s}: {any}\n", .{ iface, err });
+        return;
+    };
+    setHwaddr(iface, saved) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Could not restore MAC for {s}: {any}\n", .{ iface, err });
+        return;
+    };
+    try Output.stdoutPrint(io, alloc, "    [+] MAC restored on {s}: {s}\n", .{ iface, fmtMac(saved) });
 }
 
 fn randomMac() [6]u8 {
@@ -45,13 +55,91 @@ fn randomMac() [6]u8 {
     return buf;
 }
 
-fn fmtMac(mac: [6]u8) [17:0]u8 {
+pub fn fmtMac(mac: [6]u8) [17:0]u8 {
     var out: [17:0]u8 = undefined;
     const s = std.fmt.bufPrint(&out, "{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
     }) catch return out;
     out[s.len] = 0;
     return out;
+}
+
+fn saveOriginal(iface: []const u8) !void {
+    _ = std.os.linux.mkdir(SAVE_DIR, 0o700);
+    const mac = try getHwaddr(iface);
+
+    var path_buf: [256]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ SAVE_DIR, iface });
+
+    const fd = try std.posix.openatZ(-100, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600);
+    defer _ = std.os.linux.close(fd);
+    const text = fmtMac(mac);
+    const len = std.mem.indexOfScalar(u8, &text, 0) orelse text.len;
+    _ = std.os.linux.write(fd, &text, len);
+}
+
+fn loadOriginal(iface: []const u8) ![6]u8 {
+    var path_buf: [256]u8 = undefined;
+    const path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ SAVE_DIR, iface });
+
+    const fd = try std.posix.openatZ(-100, path, .{ .ACCMODE = .RDONLY }, 0);
+    defer _ = std.os.linux.close(fd);
+
+    var buf: [32]u8 = undefined;
+    const n = try std.posix.read(fd, &buf);
+    const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
+    return parseMac(trimmed);
+}
+
+fn parseMac(s: []const u8) ![6]u8 {
+    var mac: [6]u8 = undefined;
+    var it = std.mem.splitScalar(u8, s, ':');
+    var i: usize = 0;
+    while (it.next()) |part| {
+        if (i >= 6) return error.BadMac;
+        if (part.len != 2) return error.BadMac;
+        mac[i] = try std.fmt.parseInt(u8, part, 16);
+        i += 1;
+    }
+    if (i != 6) return error.BadMac;
+    return mac;
+}
+
+fn getHwaddr(iface: []const u8) ![6]u8 {
+    var req: ifreq = undefined;
+    @memset(std.mem.asBytes(&req), 0);
+    @memcpy(req.name[0..iface.len], iface);
+
+    const sock = std.os.linux.socket(2, 2, 0);
+    if (sock > 0x7FFFFFFFFFFFFFFF) return error.SocketFailed;
+    defer _ = std.os.linux.close(@intCast(sock));
+
+    const rc = std.os.linux.ioctl(@intCast(sock), SIOCGIFHWADDR, @intFromPtr(&req));
+    if (rc != 0) return error.IoctlFailed;
+    if (req.hwaddr.family != ARPHRD_ETHER) return error.NotEthernet;
+
+    var mac: [6]u8 = undefined;
+    @memcpy(&mac, req.hwaddr.data[0..6]);
+    return mac;
+}
+
+test "fmtMac produces correct format" {
+    const mac = [6]u8{ 0x00, 0x11, 0x22, 0x33, 0xAA, 0xBB };
+    const s = fmtMac(mac);
+    try std.testing.expectEqualStrings("00:11:22:33:aa:bb", std.mem.sliceTo(&s, 0));
+}
+
+test "parseMac round-trip" {
+    const mac = [6]u8{ 0x00, 0x11, 0x22, 0x33, 0xAA, 0xBB };
+    const s = fmtMac(mac);
+    const parsed = try parseMac(std.mem.sliceTo(&s, 0));
+    try std.testing.expectEqual(mac, parsed);
+}
+
+test "randomMac is locally administered and unicast" {
+    const mac = randomMac();
+    try std.testing.expect(mac[0] & 0x02 != 0); // locally administered
+    try std.testing.expect(mac[0] & 0x01 == 0); // unicast
 }
 
 fn setHwaddr(iface: []const u8, mac: [6]u8) !void {
