@@ -26,9 +26,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+        run: |
+          ZIG_VERSION="0.16.0"
+          ZIG_TAR="zig-${{ matrix.arch }}-linux-${ZIG_VERSION}.tar.xz"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_TAR}" -o "/tmp/${ZIG_TAR}"
+          sudo tar -xf "/tmp/${ZIG_TAR}" -C /usr/local
+          sudo ln -sf "/usr/local/zig-${{ matrix.arch }}-linux-${ZIG_VERSION}/zig" /usr/local/bin/zig
+          zig version
 
       - name: Build release binary
         run: zig build -Doptimize=ReleaseSafe
