@@ -1,5 +1,6 @@
 const std = @import("std");
 const Output = @import("../Output.zig");
+const Transport = @import("../Transport.zig");
 
 const TORRC_TEMPLATE =
     \\SOCKSPort 127.0.0.1:9050
@@ -95,12 +96,21 @@ fn startInternal(self: *@This(), io: std.Io, alloc: std.mem.Allocator, bind_addr
     }
 
     // Write torrc
-    var torrc_buf: [2048]u8 = undefined;
+    var torrc_buf: [4096]u8 = undefined;
     const torrc = if (bind_addr) |addr|
         try std.fmt.bufPrint(&torrc_buf, TORRC_CHAINED_TEMPLATE, .{ addr, DATA_DIR, LOG_FILE })
     else
         try std.fmt.bufPrint(&torrc_buf, TORRC_TEMPLATE, .{ DATA_DIR, LOG_FILE });
-    try writeFile(TORRC_FILE, torrc);
+
+    // Append bridge configuration if a pluggable transport is available
+    {
+        const fd = try std.posix.openatZ(-100, TORRC_FILE, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600);
+        defer _ = std.os.linux.close(fd);
+        _ = std.os.linux.write(fd, torrc.ptr, torrc.len);
+        Transport.writeBridgeConfig(io, alloc, fd) catch |err| {
+            try Output.stdoutPrint(io, alloc, "    [!] Bridge config failed: {any}\n", .{err});
+        };
+    }
 
     // Fork and exec tor
     const pid = std.os.linux.fork();

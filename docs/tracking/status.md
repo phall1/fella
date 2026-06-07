@@ -13,7 +13,8 @@
 | **Tor Backend** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **WireGuard Backend** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Chain Backend (VPN→Tor)** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| **Cover Traffic** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Constant-Rate Padding** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Censorship Bridges (obfs4/snowflake)** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **MAC Rotation** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Process Masquerade** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Ephemeral Mode** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
@@ -65,7 +66,8 @@
 - [x] Backend plugin architecture with union-based `Backend.Instance`
 - [x] WireGuard backend skeleton (`wg` + `ip` integration)
 - [x] Chain backend: VPN → Tor nested tunneling
-- [x] Cover traffic padding daemon (`start --cover`, `cover start|stop`)
+- [x] Constant-rate traffic padding daemon (fixed-size packets every 100ms)
+- [x] Auto-detect obfs4 / snowflake bridges for censored networks
 - [x] Subagent system for netns-side background tasks
 - [x] MAC address rotation for host interface and veth pair
 - [x] Process masquerade (`prctl(PR_SET_NAME)`) to common systemd names
@@ -77,6 +79,7 @@
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
 - [ ] WireGuard real-endpoint integration test
 - [ ] Chain backend real-endpoint integration test
+- [ ] Threat model validation checklist
 
 ### Backlog
 - [ ] macOS platform support

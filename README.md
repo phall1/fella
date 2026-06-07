@@ -42,7 +42,10 @@ Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 | 🧬 **Hardening** | Container fingerprint spoofing via `/proc` bind-mounts + LD_PRELOAD `libfella.so` |
 | 🧹 **Wipe** | 3-pass overwrite (random → complement → random) + `fsync` for session artifacts |
 | 🔗 **Chain** | VPN → Tor chaining (`--backend chain`) for nested tunneling |
-| 🎲 **Cover** | Decoy traffic padding inside the netns to frustrate traffic analysis |
+| 🎲 **Padding** | Constant-rate traffic padding (fixed-size packets every 100ms) through the tunnel |
+| 🌉 **Bridges** | Auto-detects obfs4 / snowflake transports for censored networks |
+| 🎭 **Masquerade** | Renames fella to common systemd processes in `ps` / `top` |
+| 💾 **Ephemeral** | `--ephemeral` mounts `/var/lib/fella` as tmpfs; evidence evaporates on power loss |
 | 🔐 **Crypto** | XChaCha20-Poly1305 encrypted state via `init --encrypt` |
 | ✅ **Verify** | Tor confirmation, IP exposure, direct bypass leak tests |
 
@@ -253,15 +256,35 @@ The chain path is:
 netns app → torsocks → Tor SOCKS (host) → Tor outbound bound to WG IP → WireGuard tunnel
 ```
 
-### Cover Traffic
+### Constant-Rate Traffic Padding
 
-Traffic analysis is harder when there is no silence. Enable a background daemon that fetches decoy URLs through the tunnel at random 30–180s intervals:
+Tor alone does not hide *when* you send traffic or *how much*. A nation-state passive adversary can correlate bursts entering and exiting the Tor network. fella runs a background subagent that emits fixed-size HTTP POSTs through the tunnel at a fixed 100ms interval. This pads the tunnel with constant-rate noise, making size/timing correlation significantly harder.
 
 ```bash
 sudo ./zig-out/bin/fella start --cover
 # or manually
 sudo ./zig-out/bin/fella cover start
 sudo ./zig-out/bin/fella cover stop
+```
+
+### Censorship-Resistant Bridges
+
+If you are behind a firewall that blocks Tor (e.g., China, Iran, Russia), install `obfs4proxy` or `snowflake-client` and fella will auto-inject bridge lines into `torrc`:
+
+```bash
+# Debian/Ubuntu
+sudo apt install obfs4proxy
+
+# Then start normally
+sudo fella init
+sudo fella start
+```
+
+You can also supply your own bridges:
+
+```bash
+sudo cp my-bridges.conf /var/lib/fella/bridges.conf
+sudo fella start
 ```
 
 ## Security Model
@@ -312,6 +335,17 @@ sudo ./scripts/validate.sh --all
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
 
 See [docs/tracking/status.md](docs/tracking/status.md) and [docs/tracking/nation-state-roadmap.md](docs/tracking/nation-state-roadmap.md) for the full gap analysis.
+
+## Threat Model
+
+fella is built for a specific set of adversaries and makes explicit trade-offs. It does **not** claim to defeat a global passive adversary with infinite resources.
+
+See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for:
+- Asset inventory
+- Adversary capabilities (ISP, nation-state firewall, endpoint forensics, global passive)
+- Mitigations and gaps matrix
+- Operational security recommendations
+- Trust assumptions
 
 ## Development
 
