@@ -12,7 +12,10 @@ const Passphrase = @import("Passphrase.zig");
 const Crypto = @import("Crypto.zig");
 const Wipe = @import("Wipe.zig");
 const Sandbox = @import("Sandbox.zig");
-const Cover = @import("Cover.zig");
+const Subagent = @import("Subagent.zig");
+const Masquerade = @import("Masquerade.zig");
+const Mac = @import("Mac.zig");
+const Ephemeral = @import("Ephemeral.zig");
 
 const BACKEND_FILE = "/var/lib/fella/backend_kind";
 
@@ -144,47 +147,90 @@ pub fn init(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, encrypt: boo
     try Output.stdoutPrint(io, alloc_v, "{s}[+] fella initialized{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
-pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool) !void {
+pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool, ephemeral: bool) !void {
+    // Nation-state obfuscation: rename process before anything else.
+    Masquerade.apply(io, alloc_v) catch |err| {
+        try Output.stdoutPrint(io, alloc_v, "    [!] Masquerade failed: {any}\n", .{err});
+    };
+
+    if (ephemeral) {
+        try Output.stdoutPrint(io, alloc_v, "[+] Engaging ephemeral mode (RAM-only session data)\n", .{});
+        Ephemeral.mount(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Ephemeral mount failed: {any}\n", .{err});
+        };
+    }
+
     try Output.stdoutPrint(io, alloc_v, "[+] Rotating identity...\n", .{});
     Identity.rotate(alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity rotation failed: {any}\n", .{err});
     };
 
+    // Randomize host MAC to break L2/DHCP tracking on the primary interface.
+    if (self.env.primary_iface.len > 0) {
+        Mac.rotateHost(io, alloc_v, self.env.primary_iface) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Host MAC rotation failed: {any}\n", .{err});
+        };
+    }
+
     try Netns.create(io, alloc_v);
+
+    // Randomize the host-side veth MAC too.
+    Mac.rotateVethHost(io, alloc_v) catch |err| {
+        try Output.stdoutPrint(io, alloc_v, "    [!] Veth MAC rotation failed: {any}\n", .{err});
+    };
+
     try self.backend.start(io, alloc_v);
     try self.ks.enableBasic(io, alloc_v);
 
     if (with_cover) {
-        Cover.start(io, alloc_v) catch |err| {
-            try Output.stdoutPrint(io, alloc_v, "    [!] Cover traffic failed: {any}\n", .{err});
+        Subagent.start(io, alloc_v, .cover) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Cover subagent failed: {any}\n", .{err});
         };
     }
 
     // Lock down this process after Tor and netns are set up.
-    var sandbox_ok = true;
     Sandbox.apply(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Sandbox setup failed: {any}\n", .{err});
-        sandbox_ok = false;
     };
     try self.transition(.hardened);
     try Output.stdoutPrint(io, alloc_v, "{s}[+] Hardened mode active{s}\n", .{ Output.Color.green, Output.Color.reset });
     try Output.stdoutPrint(io, alloc_v, "    [*] Backend: {s} | Use 'fella shell' for routed subshell\n", .{self.backend.name()});
 }
 
-pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool) !void {
+pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool, ephemeral: bool) !void {
+    Masquerade.apply(io, alloc_v) catch |err| {
+        try Output.stdoutPrint(io, alloc_v, "    [!] Masquerade failed: {any}\n", .{err});
+    };
+
+    if (ephemeral) {
+        try Output.stdoutPrint(io, alloc_v, "[+] Engaging ephemeral mode (RAM-only session data)\n", .{});
+        Ephemeral.mount(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Ephemeral mount failed: {any}\n", .{err});
+        };
+    }
+
     try Output.stdoutPrint(io, alloc_v, "[+] Rotating identity...\n", .{});
     Identity.rotate(alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity rotation failed: {any}\n", .{err});
     };
 
+    if (self.env.primary_iface.len > 0) {
+        Mac.rotateHost(io, alloc_v, self.env.primary_iface) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Host MAC rotation failed: {any}\n", .{err});
+        };
+    }
+
     try Output.stdoutPrint(io, alloc_v, "{s}[!] ENGAGING LOCKDOWN{s}\n", .{ Output.Color.red, Output.Color.reset });
     try Netns.create(io, alloc_v);
+    Mac.rotateVethHost(io, alloc_v) catch |err| {
+        try Output.stdoutPrint(io, alloc_v, "    [!] Veth MAC rotation failed: {any}\n", .{err});
+    };
     try self.backend.start(io, alloc_v);
     try self.ks.enableStrict(io, alloc_v);
 
     if (with_cover) {
-        Cover.start(io, alloc_v) catch |err| {
-            try Output.stdoutPrint(io, alloc_v, "    [!] Cover traffic failed: {any}\n", .{err});
+        Subagent.start(io, alloc_v, .cover) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Cover subagent failed: {any}\n", .{err});
         };
     }
 
@@ -202,7 +248,7 @@ pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity restore failed: {any}\n", .{err});
     };
 
-    Cover.stop(io, alloc_v) catch {};
+    Subagent.stopAll(io, alloc_v);
     try self.backend.stop(io, alloc_v);
     try self.ks.disable(io, alloc_v);
     Harden.revert(io, alloc_v) catch |err| {
@@ -211,6 +257,12 @@ pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     Netns.destroy(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Netns destroy failed: {any}\n", .{err});
     };
+
+    if (Ephemeral.isMounted()) {
+        Ephemeral.unmount(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Ephemeral unmount failed: {any}\n", .{err});
+        };
+    }
 
     try Output.stdoutPrint(io, alloc_v, "[+] Stopping fella...\n", .{});
     try self.transition(.off);
@@ -222,6 +274,14 @@ pub fn rotate(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     Identity.rotate(alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity rotation failed: {any}\n", .{err});
     };
+    if (self.env.primary_iface.len > 0) {
+        Mac.rotateHost(io, alloc_v, self.env.primary_iface) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Host MAC rotation failed: {any}\n", .{err});
+        };
+    }
+    Mac.rotateVethHost(io, alloc_v) catch |err| {
+        try Output.stdoutPrint(io, alloc_v, "    [!] Veth MAC rotation failed: {any}\n", .{err});
+    };
     try self.backend.rotate(io, alloc_v);
     try Output.stdoutPrint(io, alloc_v, "{s}[+] Rotation complete{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
@@ -232,6 +292,7 @@ pub fn status(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc_v, "State:      {s}\n", .{@tagName(self.state)});
     try Output.stdoutPrint(io, alloc_v, "Killswitch: {s}\n", .{@tagName(self.ks.mode)});
     try Output.stdoutPrint(io, alloc_v, "Seccomp:    {s}\n", .{if (Sandbox.isActive()) "filter active" else "inactive"});
+    try Output.stdoutPrint(io, alloc_v, "Ephemeral:  {s}\n", .{if (Ephemeral.isMounted()) "RAM-only" else "disk"});
 }
 
 pub fn verify(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
@@ -309,10 +370,20 @@ pub fn doctor(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
 
 pub fn coverStart(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     _ = self;
-    try Cover.start(io, alloc_v);
+    try Subagent.start(io, alloc_v, .cover);
 }
 
 pub fn coverStop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     _ = self;
-    try Cover.stop(io, alloc_v);
+    try Subagent.stop(io, alloc_v, .cover);
+}
+
+pub fn macRotateStart(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    _ = self;
+    try Subagent.start(io, alloc_v, .macrotate);
+}
+
+pub fn macRotateStop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    _ = self;
+    try Subagent.stop(io, alloc_v, .macrotate);
 }

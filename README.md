@@ -32,8 +32,10 @@ Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 
 | Layer | Feature |
 |-------|---------|
-| 🎭 **Identity** | Rotates hostname, machine-id, timezone, locale, bash history per session |
+| 🎭 **Identity** | Rotates hostname, machine-id, timezone, locale, MAC addresses, bash history per session |
 | 🔒 **Containment** | Dedicated `fella` network namespace with veth pair to host |
+| 🎭 **Masquerade** | Renames fella process to common systemd service names in `ps`/`top` |
+| 💾 **Ephemeral** | `--ephemeral` mounts `/var/lib/fella` as tmpfs; pull the plug, evidence vanishes |
 | 🌐 **Routing** | Tor (SOCKS5 + DNS + ControlPort), WireGuard, or chained backends |
 | ⛔ **Killswitch** | `iptables-restore` / `ip6tables-restore` atomic ruleset; basic or strict mode |
 | 🛡️ **Sandbox** | seccomp-bpf deny-list blocks 15+ dangerous syscalls |
@@ -147,12 +149,16 @@ fella init --encrypt        Enable encrypted state storage
 fella init --backend <k>    Select backend: tor | wireguard | chain
 fella start                 Activate identity + backend + containment
 fella start --cover         Enable cover traffic padding
+fella start --ephemeral     RAM-only session data (tmpfs)
 fella lockdown              Strict killswitch (backend-only traffic)
 fella lockdown --cover      Strict mode with cover traffic
+fella lockdown --ephemeral  Strict mode with RAM-only data
 fella cover start           Start cover traffic daemon
 fella cover stop            Stop cover traffic daemon
+fella macrotate start       Start periodic MAC rotation subagent
+fella macrotate stop        Stop MAC rotation subagent
 fella stop                  Deactivate everything, restore system
-fella rotate                New identity + rotate backend circuits
+fella rotate                New identity + rotate MACs + rotate backend circuit
 fella status                Show current posture
 fella verify                Run leak/health tests
 fella shell                 Drop into routed subshell (isolated netns)
@@ -314,6 +320,24 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for module lifecycle, acceptance criteria, 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Warning
+
+### Ephemeral Mode
+
+```bash
+sudo fella start --ephemeral
+```
+
+This mounts `/var/lib/fella` as a **tmpfs**. Every byte of session state — identity backups, Tor data, configs, keys, state file — lives in RAM only. Pull the plug or unmount, and it evaporates. This is the mode you want if physical seizure is in your threat model.
+
+### Process Masquerade
+
+On every `start`/`lockdown`, fella renames its own process to something boring like `systemd-resolve`, `systemd-network`, or `dbus-daemon`. `ps`, `top`, and `/proc/<pid>/comm` show the fake name. Cheap obfuscation against process-targeted attacks.
+
+### MAC Address Rotation
+
+fella randomizes the MAC address of both the primary host interface and the `veth-fella-host` pair on every start/rotate. This breaks L2 tracking, DHCP fingerprinting, and router logging correlation.
 
 ## Warning
 

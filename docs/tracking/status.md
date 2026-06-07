@@ -14,6 +14,10 @@
 | **WireGuard Backend** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Chain Backend (VPN→Tor)** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Cover Traffic** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **MAC Rotation** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Process Masquerade** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Ephemeral Mode** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Subagent System** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Container Hardening** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -62,8 +66,12 @@
 - [x] WireGuard backend skeleton (`wg` + `ip` integration)
 - [x] Chain backend: VPN → Tor nested tunneling
 - [x] Cover traffic padding daemon (`start --cover`, `cover start|stop`)
+- [x] Subagent system for netns-side background tasks
+- [x] MAC address rotation for host interface and veth pair
+- [x] Process masquerade (`prctl(PR_SET_NAME)`) to common systemd names
+- [x] Ephemeral mode: tmpfs-backed `/var/lib/fella` for RAM-only sessions
 - [x] `Makefile` with `install` / `uninstall` / `test` / `validate`
-- [x] `scripts/install.sh` for clone+build and curl-pipe install
+- [x] `scripts/install.sh` with `--auto` dependency + Zig installation
 
 ### Next Sprint (v0.5 — "Browser")
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
@@ -103,12 +111,15 @@ Status: 1/1 PASS
 
 ## Release Target
 
-**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf + cover traffic + install
+**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf + cover traffic + install + obfuscation
 - Swappable backends: Tor, WireGuard, Chain (VPN→Tor)
 - seccomp-bpf deny-list: ptrace, userfaultfd, kexec, module loading, bpf, keyctl, etc.
 - `PR_SET_NO_NEW_PRIVS` to prevent privilege escalation in child processes
 - Cover traffic daemon with decoy URL fetches through the tunnel
+- Subagent framework for netns-side background tasks (cover, MAC rotate)
+- MAC address randomization on host interface + veth pair per session/rotation
+- Process masquerade to common systemd service names
+- Ephemeral mode: tmpfs mount for `/var/lib/fella` makes all session data RAM-only
 - `make` / `make install` / `make uninstall` / `make validate-all`
-- `scripts/install.sh` for one-line install
-- All v0.3.0 "Ghost" features retained
+- `scripts/install.sh --auto` installs system deps and Zig automatically
 - Real integration (4 tests) + E2E (1 test) passing on Tor backend

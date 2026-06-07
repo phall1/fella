@@ -19,6 +19,7 @@ const params = clap.parseParamsComptime(
     \\--encrypt       Encrypt state file (init only)
     \\--backend <str> Backend: tor | wireguard | chain (default: tor)
     \\--cover         Enable cover traffic padding
+    \\--ephemeral     Keep all session state in RAM-only tmpfs
     \\<str>
     \\ 
 );
@@ -31,26 +32,30 @@ fn printHelp(io: std.Io) !void {
     try Output.stdoutWrite(io,
         \\
 
-        \\Usage: fella \<command\>
+        \\Usage: fella <command>
         \\
         \\Commands:
         \\  init                  First-time setup, probe environment
         \\  init --encrypt        Enable encrypted state storage
-        \\  init --backend \<k\>    Select backend: tor | wireguard | chain
+        \\  init --backend <k>    Select backend: tor | wireguard | chain
         \\  start                 Activate identity + backend + containment
         \\  start --cover         Enable cover traffic padding
+        \\  start --ephemeral     RAM-only session data (tmpfs)
         \\  lockdown              Full strict mode (backend-only traffic)
         \\  lockdown --cover      Strict mode with cover traffic
+        \\  lockdown --ephemeral  Strict mode with RAM-only data
         \\  stop                  Deactivate everything, restore system
-        \\  rotate                New identity + new backend circuit
+        \\  rotate                New identity + rotate backend circuit
         \\  status                Full posture report
         \\  verify                Run leak and health tests
         \\  shell                 Drop into routed subshell
-        \\  exec \<cmd\>           Run a single command in the routed namespace
+        \\  exec <cmd>            Run a single command in the routed namespace
         \\  wipe                  Clear session artifacts (secure overwrite)
         \\  harden                Apply environment patches
         \\  cover start           Start cover traffic daemon
         \\  cover stop            Stop cover traffic daemon
+        \\  macrotate start       Start periodic MAC rotation subagent
+        \\  macrotate stop        Stop MAC rotation subagent
         \\  doctor                Diagnose environment and installation
         \\  help                  Show this message
         \\  version               Show version
@@ -126,17 +131,21 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, cmd, "start")) {
         try printBanner(io, alloc);
         var with_cover = res.args.cover != 0;
+        var ephemeral = res.args.ephemeral != 0;
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "--cover")) with_cover = true;
+            if (std.mem.eql(u8, arg, "--ephemeral")) ephemeral = true;
         }
-        try engine.?.start(io, alloc, with_cover);
+        try engine.?.start(io, alloc, with_cover, ephemeral);
     } else if (std.mem.eql(u8, cmd, "lockdown")) {
         try printBanner(io, alloc);
         var with_cover = res.args.cover != 0;
+        var ephemeral = res.args.ephemeral != 0;
         while (iter.next()) |arg| {
             if (std.mem.eql(u8, arg, "--cover")) with_cover = true;
+            if (std.mem.eql(u8, arg, "--ephemeral")) ephemeral = true;
         }
-        try engine.?.lockdown(io, alloc, with_cover);
+        try engine.?.lockdown(io, alloc, with_cover, ephemeral);
     } else if (std.mem.eql(u8, cmd, "stop")) {
         try engine.?.stop(io, alloc);
     } else if (std.mem.eql(u8, cmd, "rotate")) {
@@ -175,6 +184,19 @@ pub fn main(init: std.process.Init) !void {
             try Output.stderrWrite(io, "Usage: fella cover start|stop\n");
             std.process.exit(1);
         }
+    } else if (std.mem.eql(u8, cmd, "macrotate")) {
+        const sub = iter.next() orelse {
+            try Output.stderrWrite(io, "Usage: fella macrotate start|stop\n");
+            std.process.exit(1);
+        };
+        if (std.mem.eql(u8, sub, "start")) {
+            try engine.?.macRotateStart(io, alloc);
+        } else if (std.mem.eql(u8, sub, "stop")) {
+            try engine.?.macRotateStop(io, alloc);
+        } else {
+            try Output.stderrWrite(io, "Usage: fella macrotate start|stop\n");
+            std.process.exit(1);
+        }
     } else if (std.mem.eql(u8, cmd, "doctor")) {
         try printBanner(io, alloc);
         try engine.?.doctor(io, alloc);
@@ -192,7 +214,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn needsEnv(cmd: []const u8) bool {
-    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "doctor" };
+    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "macrotate", "doctor" };
     inline for (env_cmds) |c| {
         if (std.mem.eql(u8, cmd, c)) return true;
     }
