@@ -91,20 +91,42 @@ const PADDING_INTERVAL_MS: i64 = 100;
 const PADDING_SIZE: usize = 1024;
 const PADDING_TIMEOUT_S: i64 = 5;
 
-fn runCoverLoop() void {
-    const DECOY_URLS = [_][]const u8{
-        "https://www.wikipedia.org/",
-        "https://www.reddit.com/",
-        "https://news.ycombinator.com/",
-        "https://www.bbc.com/",
-        "https://github.com/",
-        "https://www.apache.org/",
-        "https://www.debian.org/",
-        "https://archlinux.org/",
-        "https://www.kernel.org/",
-        "https://www.eff.org/",
-    };
+const DECOY_URLS = [_][]const u8{
+    "https://www.wikipedia.org/",
+    "https://www.reddit.com/",
+    "https://news.ycombinator.com/",
+    "https://www.bbc.com/",
+    "https://github.com/",
+    "https://www.apache.org/",
+    "https://www.debian.org/",
+    "https://archlinux.org/",
+    "https://www.kernel.org/",
+    "https://www.eff.org/",
+};
 
+test "DECOY_URLS is non-empty and all HTTPS" {
+    try std.testing.expect(DECOY_URLS.len > 0);
+    for (DECOY_URLS) |url| {
+        try std.testing.expect(std.mem.startsWith(u8, url, "https://"));
+    }
+}
+
+test "hex encoding produces correct length and characters" {
+    var payload_buf: [PADDING_SIZE]u8 = undefined;
+    @memset(&payload_buf, 0xAB);
+    var payload_hex: [PADDING_SIZE * 2 + 1]u8 = undefined;
+    for (payload_buf[0..PADDING_SIZE], 0..) |b, i| {
+        const hi: u8 = b >> 4;
+        const lo: u8 = b & 0x0f;
+        payload_hex[i * 2] = if (hi < 10) '0' + hi else 'a' + (hi - 10);
+        payload_hex[i * 2 + 1] = if (lo < 10) '0' + lo else 'a' + (lo - 10);
+    }
+    payload_hex[PADDING_SIZE * 2] = 0;
+    try std.testing.expectEqual(PADDING_SIZE * 2, std.mem.indexOf(u8, &payload_hex, &[_]u8{0}).?);
+    try std.testing.expectEqualStrings("ab", payload_hex[0..2]);
+}
+
+fn runCoverLoop() void {
     var seed_buf: [8]u8 = undefined;
     _ = std.os.linux.getrandom(&seed_buf, seed_buf.len, 0);
     const seed = std.mem.readInt(u64, &seed_buf, .little);

@@ -16,6 +16,7 @@ const Subagent = @import("Subagent.zig");
 const Masquerade = @import("Masquerade.zig");
 const Mac = @import("Mac.zig");
 const Ephemeral = @import("Ephemeral.zig");
+const Signal = @import("Signal.zig");
 
 const BACKEND_FILE = "/var/lib/fella/backend_kind";
 
@@ -148,6 +149,9 @@ pub fn init(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, encrypt: boo
 }
 
 pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool, ephemeral: bool) !void {
+    Signal.install();
+    defer Signal.uninstall();
+
     // Nation-state obfuscation: rename process before anything else.
     Masquerade.apply(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Masquerade failed: {any}\n", .{err});
@@ -164,6 +168,11 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover:
     Identity.rotate(alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity rotation failed: {any}\n", .{err});
     };
+    if (Signal.isInterrupted()) {
+        try Output.stdoutPrint(io, alloc_v, "\n{s}[!] Interrupted — cleaning up...{s}\n", .{ Output.Color.red, Output.Color.reset });
+        try self.stop(io, alloc_v);
+        return error.Interrupted;
+    }
 
     // Randomize host MAC to break L2/DHCP tracking on the primary interface.
     if (self.env.primary_iface.len > 0) {
@@ -173,6 +182,11 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover:
     }
 
     try Netns.create(io, alloc_v);
+    if (Signal.isInterrupted()) {
+        try Output.stdoutPrint(io, alloc_v, "\n{s}[!] Interrupted — cleaning up...{s}\n", .{ Output.Color.red, Output.Color.reset });
+        try self.stop(io, alloc_v);
+        return error.Interrupted;
+    }
 
     // Randomize the host-side veth MAC too.
     Mac.rotateVethHost(io, alloc_v) catch |err| {
@@ -180,6 +194,12 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover:
     };
 
     try self.backend.start(io, alloc_v);
+    if (Signal.isInterrupted()) {
+        try Output.stdoutPrint(io, alloc_v, "\n{s}[!] Interrupted — cleaning up...{s}\n", .{ Output.Color.red, Output.Color.reset });
+        try self.stop(io, alloc_v);
+        return error.Interrupted;
+    }
+
     try self.ks.enableBasic(io, alloc_v);
 
     if (with_cover) {
@@ -198,6 +218,9 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover:
 }
 
 pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool, ephemeral: bool) !void {
+    Signal.install();
+    defer Signal.uninstall();
+
     Masquerade.apply(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Masquerade failed: {any}\n", .{err});
     };
@@ -222,10 +245,22 @@ pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cov
 
     try Output.stdoutPrint(io, alloc_v, "{s}[!] ENGAGING LOCKDOWN{s}\n", .{ Output.Color.red, Output.Color.reset });
     try Netns.create(io, alloc_v);
+    if (Signal.isInterrupted()) {
+        try Output.stdoutPrint(io, alloc_v, "\n{s}[!] Interrupted — cleaning up...{s}\n", .{ Output.Color.red, Output.Color.reset });
+        try self.stop(io, alloc_v);
+        return error.Interrupted;
+    }
+
     Mac.rotateVethHost(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Veth MAC rotation failed: {any}\n", .{err});
     };
     try self.backend.start(io, alloc_v);
+    if (Signal.isInterrupted()) {
+        try Output.stdoutPrint(io, alloc_v, "\n{s}[!] Interrupted — cleaning up...{s}\n", .{ Output.Color.red, Output.Color.reset });
+        try self.stop(io, alloc_v);
+        return error.Interrupted;
+    }
+
     try self.ks.enableStrict(io, alloc_v);
 
     if (with_cover) {
@@ -356,16 +391,60 @@ pub fn harden(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
 
 pub fn doctor(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc_v, "=== fella Doctor ===\n", .{});
+
+    // Environment
     try Output.stdoutPrint(io, alloc_v, "Environment:\n", .{});
     try Output.stdoutPrint(io, alloc_v, "  Virtualization: {s}\n", .{self.env.virt});
     if (self.env.container_runtime) |cr| {
         try Output.stdoutPrint(io, alloc_v, "  Container:      {s}\n", .{cr});
     }
     try Output.stdoutPrint(io, alloc_v, "  Interface:      {s}\n", .{self.env.primary_iface});
-    try Output.stdoutPrint(io, alloc_v, "  SYS_ADMIN:      {}\n", .{self.env.has_sys_admin});
-    try Output.stdoutPrint(io, alloc_v, "  NET_ADMIN:      {}\n", .{self.env.has_net_admin});
-    try Output.stdoutPrint(io, alloc_v, "  Can compile C:  {}\n", .{self.env.can_compile_c});
+    try Output.stdoutPrint(io, alloc_v, "  SYS_ADMIN:      {s}\n", .{if (self.env.has_sys_admin) "yes" else "NO"});
+    try Output.stdoutPrint(io, alloc_v, "  NET_ADMIN:      {s}\n", .{if (self.env.has_net_admin) "yes" else "NO"});
+    try Output.stdoutPrint(io, alloc_v, "  Can compile C:  {s}\n", .{if (self.env.can_compile_c) "yes" else "no"});
+
+    // Required binaries
+    try Output.stdoutPrint(io, alloc_v, "\nDependencies:\n", .{});
+    const bins = .{
+        .{ "tor", "/usr/bin/tor" },
+        .{ "torsocks", "/usr/bin/torsocks" },
+        .{ "iptables", "/sbin/iptables" },
+        .{ "ip6tables", "/sbin/ip6tables" },
+        .{ "ip", "/sbin/ip" },
+        .{ "wg", "/usr/bin/wg" },
+    };
+    inline for (bins) |bin| {
+        const present = binExists(bin[1]);
+        const color = if (present) Output.Color.green else Output.Color.yellow;
+        try Output.stdoutPrint(io, alloc_v, "  {s}{s}{s}: {s}\n", .{ color, bin[0], Output.Color.reset, if (present) "found" else "not found" });
+    }
+
+    // State directory writable
+    const state_ok = stateDirWritable();
+    try Output.stdoutPrint(io, alloc_v, "\nState directory (/var/lib/fella): {s}\n", .{if (state_ok) "writable" else "NOT WRITABLE"});
+
+    // Backend status
+    try Output.stdoutPrint(io, alloc_v, "\nBackend:\n", .{});
+    try self.backend.statusLine(io, alloc_v);
+
     try Sandbox.describe(io, alloc_v);
+}
+
+fn binExists(path: []const u8) bool {
+    var path_z: [256:0]u8 = undefined;
+    if (path.len >= path_z.len) return false;
+    @memcpy(path_z[0..path.len], path);
+    path_z[path.len] = 0;
+    const rc = std.os.linux.access(&path_z, 0);
+    return rc == 0;
+}
+
+fn stateDirWritable() bool {
+    const rc = std.os.linux.access("/var/lib/fella", 2); // W_OK
+    if (rc == 0) return true;
+    // Try to create it
+    const mk = std.os.linux.mkdir("/var/lib/fella", 0o700);
+    return mk == 0 or std.posix.errno(mk) == .EXIST;
 }
 
 pub fn coverStart(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {

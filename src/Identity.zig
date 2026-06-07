@@ -125,17 +125,20 @@ pub fn rotate(alloc: std.mem.Allocator) !void {
     try saveOriginalState(alloc);
 
     // Hostname
-    var host_buf: [32]u8 = undefined;
     var tv: std.posix.timeval = undefined;
     _ = std.os.linux.gettimeofday(&tv, null);
-    var prng = std.Random.DefaultPrng.init(@intCast(tv.sec + tv.usec));
-    const random_hex = try std.fmt.bufPrint(&host_buf, "host-{x:0>8}", .{ prng.random().int(u32) });
+    const seed: u64 = @intCast(tv.sec + tv.usec);
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
+
+    var host_buf: [32]u8 = undefined;
+    const random_hex = try generateRandomHostname(&host_buf, seed);
     try setHostname(random_hex);
 
     // Machine ID
     var mid_buf: [64]u8 = undefined;
     for (0..32) |i| {
-        const hex_digit: u8 = prng.random().int(u4);
+        const hex_digit: u8 = rand.int(u4);
         mid_buf[i] = if (hex_digit < 10) '0' + hex_digit else 'a' + (hex_digit - 10);
     }
     try writeFileZ("/etc/machine-id", mid_buf[0..32]);
@@ -179,6 +182,64 @@ pub fn restore(alloc: std.mem.Allocator) !void {
     }
 }
 
+fn generateRandomHostname(out: []u8, seed: u64) ![]const u8 {
+    var prng = std.Random.DefaultPrng.init(seed);
+    return try std.fmt.bufPrint(out, "host-{x:0>8}", .{ prng.random().int(u32) });
+}
+
+fn rewriteHostsContent(alloc: std.mem.Allocator, content: []const u8, name: []const u8) ![]u8 {
+    var new_hosts = std.ArrayList(u8).empty;
+    errdefer new_hosts.deinit(alloc);
+
+    var it = std.mem.splitScalar(u8, content, '\n');
+    while (it.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t");
+        if (std.mem.startsWith(u8, trimmed, "127.0.1.1")) {
+            try new_hosts.appendSlice(alloc, "127.0.1.1\t");
+            try new_hosts.appendSlice(alloc, name);
+            try new_hosts.append(alloc, '\n');
+        } else if (std.mem.startsWith(u8, trimmed, "127.0.0.1")) {
+            if (std.mem.indexOf(u8, line, "localhost") != null) {
+                try new_hosts.appendSlice(alloc, "127.0.0.1\tlocalhost ");
+                try new_hosts.appendSlice(alloc, name);
+                try new_hosts.append(alloc, '\n');
+            } else {
+                try new_hosts.appendSlice(alloc, line);
+                try new_hosts.append(alloc, '\n');
+            }
+        } else {
+            try new_hosts.appendSlice(alloc, line);
+            try new_hosts.append(alloc, '\n');
+        }
+    }
+    return new_hosts.toOwnedSlice(alloc);
+}
+
+test "generateRandomHostname produces correct format" {
+    var buf: [32]u8 = undefined;
+    const host = try generateRandomHostname(&buf, 0x12345678);
+    try std.testing.expectEqualStrings("host-12345678", host);
+}
+
+test "rewriteHostsContent replaces 127.0.1.1 and appends to localhost" {
+    const alloc = std.testing.allocator;
+    const input = "127.0.0.1\tlocalhost\n127.0.1.1\toldhost\n";
+    const out = try rewriteHostsContent(alloc, input, "newhost");
+    defer alloc.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "127.0.1.1\tnewhost") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "127.0.0.1\tlocalhost newhost") != null);
+}
+
+test "timezone list is non-empty" {
+    const timezones = [_][]const u8{ "UTC", "America/New_York", "Europe/London", "Asia/Tokyo", "Europe/Berlin", "America/Los_Angeles", "Australia/Sydney" };
+    try std.testing.expect(timezones.len > 0);
+}
+
+test "locale list is non-empty" {
+    const locales = [_][]const u8{ "C.UTF-8", "en_US.UTF-8", "en_GB.UTF-8" };
+    try std.testing.expect(locales.len > 0);
+}
+
 fn setHostname(name: []const u8) !void {
     const rc = std.os.linux.syscall2(.sethostname, @intFromPtr(name.ptr), name.len);
     if (rc != 0) return error.SetHostnameFailed;
@@ -191,32 +252,11 @@ fn setHostname(name: []const u8) !void {
     const hosts_n = readFileZ("/etc/hosts", &hosts_buf) catch 0;
     const hosts_content = hosts_buf[0..hosts_n];
 
-    var new_hosts = std.ArrayList(u8).empty;
-    defer new_hosts.deinit(std.heap.page_allocator);
-
-    var it = std.mem.splitScalar(u8, hosts_content, '\n');
-    while (it.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t");
-        if (std.mem.startsWith(u8, trimmed, "127.0.1.1")) {
-            try new_hosts.appendSlice(std.heap.page_allocator, "127.0.1.1\t");
-            try new_hosts.appendSlice(std.heap.page_allocator, name);
-            try new_hosts.append(std.heap.page_allocator, '\n');
-        } else if (std.mem.startsWith(u8, trimmed, "127.0.0.1")) {
-            if (std.mem.indexOf(u8, line, "localhost") != null) {
-                try new_hosts.appendSlice(std.heap.page_allocator, "127.0.0.1\tlocalhost ");
-                try new_hosts.appendSlice(std.heap.page_allocator, name);
-                try new_hosts.append(std.heap.page_allocator, '\n');
-            } else {
-                try new_hosts.appendSlice(std.heap.page_allocator, line);
-                try new_hosts.append(std.heap.page_allocator, '\n');
-            }
-        } else {
-            try new_hosts.appendSlice(std.heap.page_allocator, line);
-            try new_hosts.append(std.heap.page_allocator, '\n');
-        }
-    }
-
-    try writeFileZ("/etc/hosts", new_hosts.items);
+    const new_hosts = rewriteHostsContent(std.heap.page_allocator, hosts_content, name) catch |err| {
+        return err;
+    };
+    defer std.heap.page_allocator.free(new_hosts);
+    try writeFileZ("/etc/hosts", new_hosts);
 }
 
 fn setTimezone(tz: []const u8) !void {

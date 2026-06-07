@@ -1,6 +1,7 @@
 const std = @import("std");
 const Output = @import("../Output.zig");
 const Transport = @import("../Transport.zig");
+const Signal = @import("../Signal.zig");
 
 const TORRC_TEMPLATE =
     \\SOCKSPort 127.0.0.1:9050
@@ -134,6 +135,11 @@ fn startInternal(self: *@This(), io: std.Io, alloc: std.mem.Allocator, bind_addr
     var attempts: u8 = 0;
     while (attempts < 30) : (attempts += 1) {
         _ = std.os.linux.nanosleep(&.{ .sec = 1, .nsec = 0 }, null);
+        if (Signal.isInterrupted()) {
+            try Output.stdoutPrint(io, alloc, "    [!] Tor bootstrap interrupted\n", .{});
+            self.status = .stopped;
+            return error.Interrupted;
+        }
         if (checkBootstrap()) {
             bootstrapped = true;
             break;

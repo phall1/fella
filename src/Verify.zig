@@ -4,6 +4,8 @@ const Output = @import("Output.zig");
 const CHECK_IP_URL = "https://check.torproject.org/api/ip";
 const EXPOSE_IP_URL = "https://icanhazip.com";
 
+const TorCheck = struct { is_tor: bool, ip: []const u8 };
+
 pub const Result = struct {
     name: []const u8,
     status: Status,
@@ -54,19 +56,49 @@ pub fn runAll(io: std.Io, alloc: std.mem.Allocator, results: *std.ArrayList(Resu
     });
 }
 
-fn checkTor(io: std.Io, alloc: std.mem.Allocator) !struct { is_tor: bool, ip: []const u8 } {
-    _ = io;
-    const body = try fetchUrl(alloc, CHECK_IP_URL, true);
-    defer alloc.free(body);
-
+fn parseTorCheck(body: []const u8, alloc: std.mem.Allocator) !TorCheck {
     const is_tor = std.mem.indexOf(u8, body, "\"IsTor\":true") != null;
 
-    const ip_start = std.mem.indexOf(u8, body, "\"IP\":\"") orelse return .{ .is_tor = is_tor, .ip = "unknown" };
+    const ip_start = std.mem.indexOf(u8, body, "\"IP\":\"") orelse return .{ .is_tor = is_tor, .ip = try alloc.dupe(u8, "unknown") };
     const start = ip_start + 6;
-    const end = std.mem.indexOfPos(u8, body, start, "\"") orelse return .{ .is_tor = is_tor, .ip = "unknown" };
+    const end = std.mem.indexOfPos(u8, body, start, "\"") orelse return .{ .is_tor = is_tor, .ip = try alloc.dupe(u8, "unknown") };
     const ip = body[start..end];
     const copied = try alloc.dupe(u8, ip);
     return .{ .is_tor = is_tor, .ip = copied };
+}
+
+test "parseTorCheck detects Tor=true and extracts IP" {
+    const alloc = std.testing.allocator;
+    const json = "{\"IsTor\":true,\"IP\":\"185.220.101.42\"}";
+    const result = try parseTorCheck(json, alloc);
+    defer alloc.free(result.ip);
+    try std.testing.expect(result.is_tor);
+    try std.testing.expectEqualStrings("185.220.101.42", result.ip);
+}
+
+test "parseTorCheck detects Tor=false" {
+    const alloc = std.testing.allocator;
+    const json = "{\"IsTor\":false,\"IP\":\"1.2.3.4\"}";
+    const result = try parseTorCheck(json, alloc);
+    defer alloc.free(result.ip);
+    try std.testing.expect(!result.is_tor);
+    try std.testing.expectEqualStrings("1.2.3.4", result.ip);
+}
+
+test "parseTorCheck handles missing IP" {
+    const alloc = std.testing.allocator;
+    const json = "{\"IsTor\":true}";
+    const result = try parseTorCheck(json, alloc);
+    defer alloc.free(result.ip);
+    try std.testing.expect(result.is_tor);
+    try std.testing.expectEqualStrings("unknown", result.ip);
+}
+
+fn checkTor(io: std.Io, alloc: std.mem.Allocator) !TorCheck {
+    _ = io;
+    const body = try fetchUrl(alloc, CHECK_IP_URL, true);
+    defer alloc.free(body);
+    return try parseTorCheck(body, alloc);
 }
 
 fn fetchUrl(alloc: std.mem.Allocator, url: []const u8, use_proxy: bool) ![]u8 {

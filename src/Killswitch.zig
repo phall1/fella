@@ -36,11 +36,8 @@ fn saveMode(mode: Mode) !void {
     _ = std.os.linux.write(fd, "\n", 1);
 }
 
-pub fn enableBasic(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
-    try self.save(io, alloc);
-
-    var ruleset_buf: [1024]u8 = undefined;
-    const ruleset = try std.fmt.bufPrint(&ruleset_buf,
+fn buildBasicRuleset(out: []u8) ![]const u8 {
+    return try std.fmt.bufPrint(out,
         \\*filter
         \\:INPUT DROP [0:0]
         \\:FORWARD DROP [0:0]
@@ -54,6 +51,34 @@ pub fn enableBasic(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
         \\COMMIT
         \\
     , .{VETH_HOST});
+}
+
+fn buildStrictRuleset(out: []u8) ![]const u8 {
+    return try std.fmt.bufPrint(out,
+        \\*filter
+        \\:INPUT DROP [0:0]
+        \\:FORWARD DROP [0:0]
+        \\:OUTPUT DROP [0:0]
+        \\-A INPUT -i lo -j ACCEPT
+        \\-A OUTPUT -o lo -j ACCEPT
+        \\-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        \\-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+        \\-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+        \\-A OUTPUT -m owner --uid-owner debian-tor -j ACCEPT
+        \\-A OUTPUT -p tcp -d 127.0.0.1 --dport 9050 -j ACCEPT
+        \\-A OUTPUT -p tcp -d 127.0.0.1 --dport 9051 -j ACCEPT
+        \\-A OUTPUT -p udp -d 127.0.0.1 --dport 5353 -j ACCEPT
+        \\-A INPUT -i {s} -j ACCEPT
+        \\COMMIT
+        \\
+    , .{VETH_HOST});
+}
+
+pub fn enableBasic(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
+    try self.save(io, alloc);
+
+    var ruleset_buf: [1024]u8 = undefined;
+    const ruleset = try buildBasicRuleset(&ruleset_buf);
     try applyRuleset(alloc, "iptables-restore", ruleset);
 
     const ip6ruleset =
@@ -77,24 +102,7 @@ pub fn enableStrict(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void 
     try self.save(io, alloc);
 
     var ruleset_buf: [1024]u8 = undefined;
-    const ruleset = try std.fmt.bufPrint(&ruleset_buf,
-        \\*filter
-        \\:INPUT DROP [0:0]
-        \\:FORWARD DROP [0:0]
-        \\:OUTPUT DROP [0:0]
-        \\-A INPUT -i lo -j ACCEPT
-        \\-A OUTPUT -o lo -j ACCEPT
-        \\-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        \\-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-        \\-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
-        \\-A OUTPUT -m owner --uid-owner debian-tor -j ACCEPT
-        \\-A OUTPUT -p tcp -d 127.0.0.1 --dport 9050 -j ACCEPT
-        \\-A OUTPUT -p tcp -d 127.0.0.1 --dport 9051 -j ACCEPT
-        \\-A OUTPUT -p udp -d 127.0.0.1 --dport 5353 -j ACCEPT
-        \\-A INPUT -i {s} -j ACCEPT
-        \\COMMIT
-        \\
-    , .{VETH_HOST});
+    const ruleset = try buildStrictRuleset(&ruleset_buf);
     try applyRuleset(alloc, "iptables-restore", ruleset);
 
     const ip6ruleset =
@@ -179,6 +187,31 @@ fn applyRuleset(alloc: std.mem.Allocator, cmd: []const u8, ruleset: []const u8) 
         return error.ForkFailed;
     }
     _ = alloc;
+}
+
+test "buildBasicRuleset contains expected patterns" {
+    var buf: [1024]u8 = undefined;
+    const rs = try buildBasicRuleset(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, rs, "COMMIT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, ":INPUT DROP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, ":OUTPUT ACCEPT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, "veth-fella-host") != null);
+}
+
+test "buildStrictRuleset contains expected patterns" {
+    var buf: [1024]u8 = undefined;
+    const rs = try buildStrictRuleset(&buf);
+    try std.testing.expect(std.mem.indexOf(u8, rs, "COMMIT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, ":OUTPUT DROP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, "debian-tor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, "9050") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rs, "5353") != null);
+}
+
+test "Mode enum values" {
+    try std.testing.expectEqual(@intFromEnum(Mode.disabled), 0);
+    try std.testing.expectEqual(@intFromEnum(Mode.basic), 1);
+    try std.testing.expectEqual(@intFromEnum(Mode.strict), 2);
 }
 
 fn runCmd(alloc: std.mem.Allocator, argv: []const []const u8) !void {
