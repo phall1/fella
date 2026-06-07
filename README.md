@@ -94,15 +94,49 @@ Optional packages:
 
 ## Install
 
+### Method 1: Prebuilt Binary (fastest)
+
+We publish binaries for every release via [GitHub Releases](https://github.com/phall1/fella/releases).
+
 ```bash
-# Method 1: clone and build
+# Pick your architecture: x86_64 or aarch64
+ARCH=$(uname -m)
+VERSION=$(curl -s https://api.github.com/repos/phall1/fella/releases/latest | grep tag_name | cut -d '"' -f 4)
+
+sudo curl -fsSL -o /usr/local/bin/fella \
+  "https://github.com/phall1/fella/releases/download/${VERSION}/fella-${VERSION}-${ARCH}-linux"
+sudo chmod +x /usr/local/bin/fella
+sudo mkdir -p /var/lib/fella /var/lib/fella/original /var/lib/fella/tor
+```
+
+You still need runtime dependencies. The install script below can set those up.
+
+### Method 2: One-Line Curl Install (builds from source)
+
+The install script detects your package manager, installs missing dependencies, downloads Zig if needed, clones the repo, builds fella, and installs it.
+
+```bash
+# Interactive — tells you what's missing and how to install it
+curl -sL https://raw.githubusercontent.com/phall1/fella/main/scripts/install.sh | sudo bash
+
+# Fully automatic — installs deps, downloads Zig, builds, and installs
+curl -sL https://raw.githubusercontent.com/phall1/fella/main/scripts/install.sh | sudo bash -s -- --auto
+```
+
+Supported platforms: Ubuntu/Debian (`apt`), Fedora/RHEL (`dnf`), Arch (`pacman`), Alpine (`apk`).
+
+What `--auto` installs:
+- `iptables`, `iproute2`, `tor`, `torsocks`, `wireguard-tools`
+- `curl`, `git`, `gcc` (for `fella harden`)
+- Zig 0.16.0 into `/opt/zig-0.16.0` with a symlink at `/usr/local/bin/zig`
+
+### Method 3: Clone and Build Manually
+
+```bash
 git clone https://github.com/phall1/fella.git
 cd fella
 make              # or: zig build
 sudo make install
-
-# Method 2: curl pipe
-curl -sL https://raw.githubusercontent.com/phall1/fella/main/scripts/install.sh | sudo bash
 ```
 
 ## Commands

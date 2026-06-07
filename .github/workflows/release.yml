@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-linux-gnu
+            arch: x86_64
+            runner: ubuntu-24.04
+          - target: aarch64-linux-gnu
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.16.0
+
+      - name: Build release binary
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp zig-out/bin/fella dist/fella-${{ github.ref_name }}-${{ matrix.arch }}-linux
+          cp scripts/install.sh dist/install-${{ matrix.arch }}.sh
+          chmod +x dist/*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fella-${{ matrix.arch }}-linux
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
