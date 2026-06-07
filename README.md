@@ -12,6 +12,7 @@
 ## What It Does
 
 - **Identity Rotation:** Changes hostname, machine-id, timezone, locale, and keyboard layout per-session
+- **Network Namespace Isolation:** Dedicated `fella` netns with veth pair — apps inside are transparently routed through Tor, apps outside are unaffected
 - **Traffic Routing:** Supports Tor, WireGuard, OpenVPN, and chained combinations
 - **Killswitch:** Blocks all non-backend traffic at the iptables level
 - **Container Hardening:** Patches kernel/CPU fingerprints in container environments
@@ -29,9 +30,11 @@ zig build
 
 # Run
 sudo ./zig-out/bin/fella init
-sudo ./zig-out/bin/fella start    # Identity + Tor + basic killswitch
-sudo ./zig-out/bin/fella verify   # Run leak tests
-sudo ./zig-out/bin/fella stop     # Restore everything
+sudo ./zig-out/bin/fella start              # Identity + Tor + netns + basic killswitch
+sudo ./zig-out/bin/fella shell              # Drop into Tor-routed subshell
+sudo ./zig-out/bin/fella exec curl https://check.torproject.org/api/ip
+sudo ./zig-out/bin/fella verify             # Run leak tests
+sudo ./zig-out/bin/fella stop               # Restore everything
 ```
 
 ## Requirements
@@ -42,8 +45,8 @@ sudo ./zig-out/bin/fella stop     # Restore everything
 
 Optional:
 - `tor` — for Tor backend
+- `torsocks` — for transparent SOCKS proxying inside the netns
 - `wireguard-tools` — for WireGuard backend
-- `proxychains4` — for application-level proxying
 
 ## Install
 
@@ -68,7 +71,8 @@ fella stop        Deactivate everything, restore system
 fella rotate      New identity + rotate circuits
 fella status      Show current posture
 fella verify      Run leak/health tests
-fella shell       Drop into backend-routed subshell
+fella shell       Drop into Tor-routed subshell (isolated netns)
+fella exec <cmd>  Run a single command in the Tor-routed namespace
 fella wipe        Clear session artifacts
 fella harden      Apply container fingerprint patches
 fella doctor      Diagnose environment
@@ -109,8 +113,10 @@ See [docs/tracking/status.md](docs/tracking/status.md) for module-by-module stat
 | Killswitch | ✅ Complete |
 | Container Hardening | ✅ Complete |
 | Verification Suite | ✅ Complete |
+| Network Namespace Isolation | ✅ Complete |
+| Transparent Proxy (torsocks) | ✅ Complete |
 
-For the gap analysis between v0.1.0 and super-elite tier, see [docs/tracking/make-super-good-roadmap.md](docs/tracking/make-super-good-roadmap.md).
+For the gap analysis between v0.1.0 and nation-state tier, see [docs/tracking/nation-state-roadmap.md](docs/tracking/nation-state-roadmap.md).
 
 ## License
 

@@ -3,7 +3,9 @@ const Output = @import("../Output.zig");
 
 const TORRC_TEMPLATE =
     \\SOCKSPort 127.0.0.1:9050
+    \\SOCKSPort 10.200.200.1:9050
     \\DNSPort 127.0.0.1:5353
+    \\DNSPort 10.200.200.1:5353
     \\ControlPort 127.0.0.1:9051
     \\DataDirectory {s}
     \\DisableDebuggerAttachment 1

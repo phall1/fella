@@ -69,7 +69,7 @@ pub fn apply(io: std.Io, alloc: std.mem.Allocator, env: anytype) !void {
         try Output.stdoutPrint(io, alloc, "    [*] Skipping bind mounts (no SYS_ADMIN)\n", .{});
     }
 
-    // Write fake values to writable kernel files
+    // Write fake values to writable kernel files (some may be ro in containers)
     for (KERNEL_FILES) |path| {
         const fname = std.fs.path.basename(path);
         const val = if (std.mem.eql(u8, fname, "ostype"))
@@ -85,7 +85,10 @@ pub fn apply(io: std.Io, alloc: std.mem.Allocator, env: anytype) !void {
         else
             continue;
         writeFileZ(path, val) catch |err| {
-            try Output.stdoutPrint(io, alloc, "    [!] Could not write {s}: {any}\n", .{ path, err });
+            // AccessDenied is expected in some containers; don't spam
+            if (err != error.AccessDenied) {
+                try Output.stdoutPrint(io, alloc, "    [!] Could not write {s}: {any}\n", .{ path, err });
+            }
             continue;
         };
         try Output.stdoutPrint(io, alloc, "    [+] Spoofed {s}\n", .{path});

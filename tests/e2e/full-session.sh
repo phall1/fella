@@ -30,8 +30,8 @@ ORIG_MID=$(cat /etc/machine-id 2>/dev/null || echo "NONE")
 echo "      Original: host=$ORIG_HOST machine-id=$ORIG_MID"
 
 # Clean state
+sudo rm -rf /var/lib/fella
 sudo pkill -9 tor 2>/dev/null || true
-sudo rm -f /var/lib/fella/tor.pid
 sleep 1
 
 # Step 1: Init
@@ -42,9 +42,9 @@ echo "      Step 1: init ✓"
 $FELLA start > /dev/null 2>&1
 echo "      Step 2: start ✓"
 
-# Step 3: Verify traffic goes through Tor
-IP=$(proxychains4 curl -s --max-time 15 https://checkip.amazonaws.com 2>/dev/null || echo "TIMEOUT")
-TOR_CHECK=$(proxychains4 curl -s --max-time 15 https://check.torproject.org/api/ip 2>/dev/null || echo "TIMEOUT")
+# Step 3: Verify traffic goes through Tor using fella exec
+IP=$($FELLA exec curl -s --max-time 15 https://checkip.amazonaws.com 2>/dev/null || echo "TIMEOUT")
+TOR_CHECK=$($FELLA exec curl -s --max-time 15 https://check.torproject.org/api/ip 2>/dev/null || echo "TIMEOUT")
 if echo "$TOR_CHECK" | grep -q 'IsTor.*true'; then
     echo "      Step 3: tor routing verified ✓ (IP: $IP)"
 else

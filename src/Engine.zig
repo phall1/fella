@@ -7,22 +7,77 @@ const Tor = @import("backends/Tor.zig");
 const Killswitch = @import("Killswitch.zig");
 const Verify = @import("Verify.zig");
 const Harden = @import("Harden.zig");
+const Netns = @import("Netns.zig");
+const Passphrase = @import("Passphrase.zig");
+const Crypto = @import("Crypto.zig");
+const Wipe = @import("Wipe.zig");
 
 alloc: std.mem.Allocator,
 env: platform.Environment,
 state: State.State,
 tor: Tor,
 ks: Killswitch,
+encrypted: bool,
 
 pub fn create(alloc: std.mem.Allocator, env: platform.Environment) !@This() {
-    const saved = State.load() catch .off;
+    const saved = try loadState(alloc);
+    const enc = isEncryptedMarker();
     return .{
         .alloc = alloc,
         .env = env,
         .state = saved,
         .tor = Tor.create(),
         .ks = Killswitch.create(),
+        .encrypted = enc,
     };
+}
+
+fn isEncryptedMarker() bool {
+    const fd = std.posix.openatZ(-100, "/var/lib/fella/.encrypted", .{ .ACCMODE = .RDONLY }, 0) catch return false;
+    _ = std.os.linux.close(fd);
+    return true;
+}
+
+fn setEncryptedMarker() !void {
+    _ = std.os.linux.mkdir("/var/lib/fella", 0o700);
+    const fd = try std.posix.openatZ(-100, "/var/lib/fella/.encrypted", .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600);
+    _ = std.os.linux.close(fd);
+}
+
+fn loadState(alloc: std.mem.Allocator) !State.State {
+    const raw = try State.loadRaw(alloc) orelse return .off;
+    defer alloc.free(raw);
+
+    if (Passphrase.isEncrypted(raw)) {
+        const pass_c = std.c.getenv("FELLA_PASSPHRASE") orelse return error.NoPassphrase;
+        const pass = std.mem.sliceTo(pass_c, 0);
+        if (pass.len == 0) return error.NoPassphrase;
+
+        const decrypted = try Crypto.decrypt(alloc, raw, pass);
+        defer alloc.free(decrypted);
+
+        return State.parse(decrypted);
+    }
+    return State.parse(raw);
+}
+
+fn saveState(self: *@This(), s: State.State) !void {
+    const text = State.serialize(s);
+    var buf: [64]u8 = undefined;
+    const data = std.fmt.bufPrint(&buf, "{s}\n", .{text}) catch text;
+
+    if (self.encrypted) {
+        const pass_c = std.c.getenv("FELLA_PASSPHRASE") orelse return error.NoPassphrase;
+        const pass = std.mem.sliceTo(pass_c, 0);
+        if (pass.len == 0) return error.NoPassphrase;
+
+        const encrypted = try Crypto.encrypt(self.alloc, data, pass);
+        defer self.alloc.free(encrypted);
+
+        try State.saveRaw(encrypted);
+    } else {
+        try State.saveRaw(data);
+    }
 }
 
 pub fn deinit(self: *@This()) void {
@@ -31,10 +86,10 @@ pub fn deinit(self: *@This()) void {
 
 fn transition(self: *@This(), new_state: State.State) !void {
     self.state = new_state;
-    try State.save(new_state);
+    try self.saveState(new_state);
 }
 
-pub fn init(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
+pub fn init(self: *@This(), io: std.Io, alloc: std.mem.Allocator, encrypt: bool) !void {
     try Output.stdoutPrint(io, alloc, "[+] Probing environment...\n", .{});
     try Output.stdoutPrint(io, alloc, "    Virtualization: {s}\n", .{self.env.virt});
     if (self.env.container_runtime) |cr| {
@@ -43,6 +98,19 @@ pub fn init(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc, "    Interface:      {s}\n", .{self.env.primary_iface});
     try Output.stdoutPrint(io, alloc, "    SYS_ADMIN:      {}\n", .{self.env.has_sys_admin});
     try Output.stdoutPrint(io, alloc, "    NET_ADMIN:      {}\n", .{self.env.has_net_admin});
+
+    self.encrypted = encrypt;
+    if (encrypt) {
+        if (std.c.getenv("FELLA_PASSPHRASE") == null) {
+            try Output.stdoutPrint(io, alloc, "    [!] Encryption requested but FELLA_PASSPHRASE not set\n", .{});
+            try Output.stdoutPrint(io, alloc, "    [*] Run: export FELLA_PASSPHRASE=your_password\n", .{});
+            self.encrypted = false;
+        } else {
+            try setEncryptedMarker();
+            try Output.stdoutPrint(io, alloc, "    [*] Encrypted state enabled\n", .{});
+        }
+    }
+
     try self.transition(.init);
     try Output.stdoutPrint(io, alloc, "{s}[+] fella initialized{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
@@ -53,11 +121,13 @@ pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
         try Output.stdoutPrint(io, alloc, "    [!] Identity rotation failed: {any}\n", .{err});
     };
 
+    try Netns.create(io, alloc);
     try self.tor.start(io, alloc);
     try self.ks.enableBasic(io, alloc);
 
     try self.transition(.hardened);
     try Output.stdoutPrint(io, alloc, "{s}[+] Hardened mode active{s}\n", .{ Output.Color.green, Output.Color.reset });
+    try Output.stdoutPrint(io, alloc, "    [*] Use 'fella shell' for Tor-routed subshell\n", .{});
 }
 
 pub fn lockdown(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
@@ -67,10 +137,12 @@ pub fn lockdown(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     };
 
     try Output.stdoutPrint(io, alloc, "{s}[!] ENGAGING LOCKDOWN{s}\n", .{ Output.Color.red, Output.Color.reset });
+    try Netns.create(io, alloc);
     try self.tor.start(io, alloc);
     try self.ks.enableStrict(io, alloc);
     try self.transition(.lockdown);
     try Output.stdoutPrint(io, alloc, "{s}[+] LOCKDOWN ACTIVE{s}\n", .{ Output.Color.green, Output.Color.reset });
+    try Output.stdoutPrint(io, alloc, "    [*] Host outbound blocked. Use 'fella shell' for Tor-routed access.\n", .{});
 }
 
 pub fn stop(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
@@ -83,6 +155,9 @@ pub fn stop(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     try self.ks.disable(io, alloc);
     Harden.revert(io, alloc) catch |err| {
         try Output.stdoutPrint(io, alloc, "    [!] Harden revert failed: {any}\n", .{err});
+    };
+    Netns.destroy(io, alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Netns destroy failed: {any}\n", .{err});
     };
 
     try Output.stdoutPrint(io, alloc, "[+] Stopping fella...\n", .{});
@@ -146,57 +221,19 @@ pub fn verify(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
 
 pub fn shell(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     _ = self;
-    try Output.stdoutPrint(io, alloc, "{s}[+] Dropping into fella shell{s}\n", .{ Output.Color.blue, Output.Color.reset });
-    try Output.stdoutPrint(io, alloc, "    Type 'exit' to return\n", .{});
+    try Netns.shell(io, alloc);
+}
 
-    const pid = std.os.linux.fork();
-    if (pid == 0) {
-        const script =
-            \\#!/bin/sh
-            \\export FELLA_FAKE_RELEASE="5.15.0-generic"
-            \\export FELLA_FAKE_VERSION="#1 SMP PREEMPT_DYNAMIC"
-            \\export FELLA_FAKE_MACHINE="x86_64"
-            \\export FELLA_FAKE_SYSNAME="Linux"
-            \\export FELLA_FAKE_UPTIME="86400"
-            \\export LD_PRELOAD="/var/lib/fella/libfella.so"
-            \\exec "${SHELL:-/bin/bash}" -i
-        ;
-        const cmd = "/tmp/fella_shell.sh";
-        _ = std.os.linux.unlink(cmd);
-        var path_z: [256:0]u8 = undefined;
-        @memcpy(path_z[0..cmd.len], cmd);
-        path_z[cmd.len] = 0;
-        const fd = std.os.linux.open(&path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o700);
-        if (fd >= 0) {
-            _ = std.os.linux.write(@intCast(fd), script.ptr, script.len);
-            _ = std.os.linux.close(@intCast(fd));
-        }
-        const argv = [_:null]?[*:0]const u8{ "sh", cmd, null };
-        _ = std.os.linux.execve("/bin/sh", &argv, @ptrCast(std.c.environ));
-        std.os.linux.exit(1);
-    } else if (pid > 0) {
-        var wstatus: u32 = 0;
-        _ = std.os.linux.waitpid(@intCast(pid), &wstatus, 0);
-    } else {
-        return error.ForkFailed;
-    }
+pub fn exec(self: *@This(), io: std.Io, alloc: std.mem.Allocator, argv: []const []const u8) !void {
+    _ = self;
+    try Output.stderrPrint(io, alloc, "{s}[+] Executing in fella namespace{s}\n", .{ Output.Color.blue, Output.Color.reset });
+    try Netns.execNs(io, alloc, argv);
 }
 
 pub fn wipe(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     _ = self;
     try Output.stdoutPrint(io, alloc, "{s}[!] WIPING SESSION ARTIFACTS{s}\n", .{ Output.Color.red, Output.Color.reset });
-
-    const pid = std.os.linux.fork();
-    if (pid == 0) {
-        const argv = [_:null]?[*:0]const u8{ "rm", "-rf", "/var/lib/fella", null };
-        _ = std.os.linux.execve("/usr/bin/rm", &argv, @ptrCast(std.c.environ));
-        _ = std.os.linux.execve("/bin/rm", &argv, @ptrCast(std.c.environ));
-        std.os.linux.exit(1);
-    } else if (pid > 0) {
-        var wstatus: u32 = 0;
-        _ = std.os.linux.waitpid(@intCast(pid), &wstatus, 0);
-    }
-
+    try Wipe.dir(io, alloc, "/var/lib/fella");
     try Output.stdoutPrint(io, alloc, "{s}[+] Wipe complete{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 

@@ -14,7 +14,7 @@ ORIG_HOST=$(hostname)
 echo "      Original hostname: $ORIG_HOST"
 
 # Clean state
-sudo rm -f /var/lib/fella/tor.pid
+sudo rm -rf /var/lib/fella
 sudo pkill -9 tor 2>/dev/null || true
 
 $FELLA init > /dev/null 2>&1

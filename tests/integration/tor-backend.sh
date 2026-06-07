@@ -16,8 +16,8 @@ if ! command -v tor > /dev/null 2>&1; then
 fi
 
 # Clean state
+sudo rm -rf /var/lib/fella
 sudo pkill -9 tor 2>/dev/null || true
-sudo rm -f /var/lib/fella/tor.pid
 sleep 1
 
 # Start fella (which starts Tor)

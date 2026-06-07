@@ -6,7 +6,7 @@ const ORIGINAL_DIR = "/var/lib/fella/original";
 fn readFileZ(path: [*:0]const u8, buf: []u8) !usize {
     const fd = std.posix.openatZ(-100, path, .{ .ACCMODE = .RDONLY }, 0) catch {
         const rc = std.os.linux.open(path, .{ .ACCMODE = .RDONLY }, 0);
-        if (rc < 0) return error.FileNotFound;
+        if (rc > 0x7FFFFFFFFFFFFFFF) return error.FileNotFound;
         const fd2: i32 = @intCast(rc);
         const n = std.posix.read(fd2, buf) catch return error.ReadError;
         _ = std.os.linux.close(fd2);
@@ -19,7 +19,7 @@ fn readFileZ(path: [*:0]const u8, buf: []u8) !usize {
 fn writeFileZ(path: [*:0]const u8, data: []const u8) !void {
     const fd = std.posix.openatZ(-100, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644) catch {
         const rc = std.os.linux.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
-        if (rc < 0) return error.OpenFailed;
+        if (rc > 0x7FFFFFFFFFFFFFFF) return error.OpenFailed;
         const fd2: i32 = @intCast(rc);
         _ = std.os.linux.write(fd2, data.ptr, data.len);
         _ = std.os.linux.close(fd2);
@@ -30,11 +30,8 @@ fn writeFileZ(path: [*:0]const u8, data: []const u8) !void {
 }
 
 fn saveOriginal(name: []const u8, data: []const u8) !void {
-    const rc = std.os.linux.mkdir(ORIGINAL_DIR, 0o700);
-    if (rc < 0) {
-        const err = std.posix.errno(rc);
-        if (err != .EXIST) return error.MkdirFailed;
-    }
+    _ = std.os.linux.mkdir("/var/lib/fella", 0o700);
+    _ = std.os.linux.mkdir(ORIGINAL_DIR, 0o700);
 
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ ORIGINAL_DIR, name });
@@ -74,7 +71,7 @@ fn getCurrentMachineId() !?[]const u8 {
 fn getCurrentTimezone(alloc: std.mem.Allocator) ![]u8 {
     var buf: [256]u8 = undefined;
     const rc = std.os.linux.readlink("/etc/localtime", &buf, buf.len);
-    if (rc < 0) {
+    if (rc > 0x7FFFFFFFFFFFFFFF) {
         // Fallback: try /etc/timezone
         const n = readFileZ("/etc/timezone", &buf) catch return try alloc.dupe(u8, "UTC");
         return try alloc.dupe(u8, std.mem.trim(u8, buf[0..n], " \n\r\t"));

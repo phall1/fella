@@ -13,8 +13,9 @@ const BANNER =
 ;
 
 const params = clap.parseParamsComptime(
-    \\-h, --help    Display this help and exit.
-    \\-v, --version Display version and exit.
+    \\-h, --help      Display this help and exit.
+    \\-v, --version    Display version and exit.
+    \\--encrypt       Encrypt state file (init only)
     \\<str>
     \\
 );
@@ -26,22 +27,25 @@ fn printBanner(io: std.Io, alloc: std.mem.Allocator) !void {
 fn printHelp(io: std.Io) !void {
     try Output.stdoutWrite(io,
         \\
+
         \\Usage: fella <command>
         \\
         \\Commands:
-        \\  init        First-time setup, probe environment
-        \\  start       Activate identity + tor + basic killswitch
-        \\  lockdown    Full strict mode (tor-only traffic)
-        \\  stop        Deactivate everything, restore system
-        \\  rotate      New identity + new tor circuit
-        \\  status      Full posture report
-        \\  verify      Run leak and health tests
-        \\  shell       Drop into tor-routed subshell
-        \\  wipe        Clear session artifacts
-        \\  harden      Apply environment patches
-        \\  doctor      Diagnose environment and installation
-        \\  help        Show this message
-        \\  version     Show version
+        \\  init             First-time setup, probe environment
+        \\  init --encrypt   Enable encrypted state storage (or: --encrypt init)
+        \\  start            Activate identity + tor + basic killswitch
+        \\  lockdown         Full strict mode (tor-only traffic)
+        \\  stop             Deactivate everything, restore system
+        \\  rotate           New identity + new tor circuit
+        \\  status           Full posture report
+        \\  verify           Run leak and health tests
+        \\  shell            Drop into tor-routed subshell
+        \\  exec <cmd>       Run a single command in the tor-routed namespace
+        \\  wipe             Clear session artifacts (secure overwrite)
+        \\  harden           Apply environment patches
+        \\  doctor           Diagnose environment and installation
+        \\  help             Show this message
+        \\  version          Show version
         \\
     );
 }
@@ -73,7 +77,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (res.args.version != 0) {
-        try Output.stdoutPrint(io, alloc, "fella 0.1.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.3.0\n", .{});
         return;
     }
 
@@ -93,7 +97,11 @@ pub fn main(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "init")) {
         try printBanner(io, alloc);
-        try engine.?.init(io, alloc);
+        var encrypt = res.args.encrypt != 0;
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--encrypt")) encrypt = true;
+        }
+        try engine.?.init(io, alloc, encrypt);
     } else if (std.mem.eql(u8, cmd, "start")) {
         try printBanner(io, alloc);
         try engine.?.start(io, alloc);
@@ -110,6 +118,17 @@ pub fn main(init: std.process.Init) !void {
         try engine.?.verify(io, alloc);
     } else if (std.mem.eql(u8, cmd, "shell")) {
         try engine.?.shell(io, alloc);
+    } else if (std.mem.eql(u8, cmd, "exec")) {
+        var argv: std.ArrayList([]const u8) = .empty;
+        defer argv.deinit(alloc);
+        while (iter.next()) |arg| {
+            try argv.append(alloc, arg);
+        }
+        if (argv.items.len == 0) {
+            try Output.stderrWrite(io, "Usage: fella exec <command> [args...]\n");
+            std.process.exit(1);
+        }
+        try engine.?.exec(io, alloc, argv.items);
     } else if (std.mem.eql(u8, cmd, "wipe")) {
         try engine.?.wipe(io, alloc);
     } else if (std.mem.eql(u8, cmd, "harden")) {
@@ -120,7 +139,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, cmd, "help")) {
         try printHelp(io);
     } else if (std.mem.eql(u8, cmd, "version")) {
-        try Output.stdoutPrint(io, alloc, "fella 0.1.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.3.0\n", .{});
     } else {
         try Output.stderrWrite(io, "Unknown command: ");
         try Output.stderrWrite(io, cmd);
@@ -131,7 +150,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn needsEnv(cmd: []const u8) bool {
-    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "wipe", "harden", "doctor" };
+    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "doctor" };
     inline for (env_cmds) |c| {
         if (std.mem.eql(u8, cmd, c)) return true;
     }

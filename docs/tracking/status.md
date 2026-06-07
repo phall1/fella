@@ -1,7 +1,7 @@
 # fella Development Status
 
-> Last updated: 2026-06-06
-> Current version: 0.1.0-dev
+> Last updated: 2026-06-07
+> Current version: 0.3.0 "Ghost"
 
 ## Module Status
 
@@ -14,7 +14,12 @@
 | **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Container Hardening** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Netns Isolation** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Transparent Proxy** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Install/Build** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Secure Memory** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Anti-Forensic Wipe** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Encrypted State** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 **Legend:**
 - ✅ Complete
@@ -24,7 +29,7 @@
 
 ## Active Work
 
-### This Sprint (Completed)
+### v0.1.0 "Foundation" Completed
 - [x] Core Engine state persistence (save/load `/var/lib/fella/state`)
 - [x] Identity module implementation (hostname, machine-id, timezone, locale)
 - [x] Tor backend (process management, config generation, bootstrap, circuit rotation)
@@ -32,15 +37,33 @@
 - [x] Verification suite (IP exposure, Tor check, direct bypass)
 - [x] Integration + E2E tests
 
-### Next Sprint
-- [ ] Container hardening (proc/cpuinfo spoofing, LD_PRELOAD)
-- [ ] WireGuard backend
+### v0.2.0 "Fortress" Completed
+- [x] Network namespace isolation (`fella` netns with veth pair)
+- [x] Transparent proxy via torsocks (no proxychains dependency)
+- [x] `fella shell` — drops into Tor-routed netns
+- [x] `fella exec <cmd>` — run single commands in netns
+- [x] Fail-closed firewall inside netns (DROP all except Tor SOCKS/DNS)
+- [x] Host NAT for netns outbound traffic
+
+### v0.3.0 "Ghost" Completed
+- [x] Secure memory (`mlock`, explicit zeroing, `MADV_DONTDUMP`)
+- [x] Anti-forensic wipe (3-pass overwrite: random → complement → random + `fsync`)
+- [x] Encrypted state storage (XChaCha20-Poly1305 + PBKDF2, `FELLA_PASSPHRASE` env var)
+- [x] `fella init --encrypt` flag
+- [x] Killswitch batched via `iptables-restore` / `ip6tables-restore`
+- [x] Silent cleanup (no stderr noise from stale state removal)
+- [x] Container hardening AccessDenied suppression
+
+### Next Sprint (v0.4 — "Chain")
+- [ ] Seccomp-bpf sandbox for fella process
+- [ ] WireGuard backend plugin
 - [ ] Backend chaining (VPN → Tor)
+- [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
 
 ### Backlog
-- [ ] Persona system
 - [ ] macOS platform support
-- [ ] Persona encryption
+- [ ] Traffic padding / cover traffic
+- [ ] Interactive passphrase prompt (when Zig supports it)
 
 ## Blockers
 
@@ -52,28 +75,33 @@
 
 ### Unit Tests
 ```
-Last run: 2026-06-06
+Last run: 2026-06-07
 Status: PASS
 ```
 
 ### Integration Tests
 ```
-Last run: 2026-06-06
-Status: 3/3 PASS
+Last run: 2026-06-07
+Status: 4/4 PASS
 ```
 
 ### E2E Tests
 ```
-Last run: 2026-06-06
+Last run: 2026-06-07
 Status: 1/1 PASS
 ```
 
 ## Release Target
 
-**v0.1.0 MVP** — Ready for release
-- init/start/stop/rotate/lockdown/status/verify/doctor
-- Tor backend with basic/strict killswitch
-- Linux x86_64 + aarch64
-- Identity rotation (hostname, machine-id, timezone, locale)
+**v0.3.0 "Ghost"** — Ready for release
+- init/start/stop/rotate/lockdown/status/verify/doctor/shell/exec/wipe/harden
+- Tor backend with netns isolation + transparent torsocks proxy
+- Basic/strict killswitch with atomic `iptables-restore`
+- Identity rotation (hostname, machine-id, timezone, locale) with backup/restore
+- Container hardening (proc bind mounts + LD_PRELOAD `libfella.so`)
 - Verification suite (Tor confirmation, IP exposure, direct bypass)
-- Real integration + E2E tests
+- Secure memory (`mlock`, `secureZero`, `madvise(MADV_DONTDUMP)`)
+- Anti-forensic 3-pass wipe with `fsync`
+- Encrypted state file (XChaCha20-Poly1305)
+- Real integration (4 tests) + E2E (1 test)
+- Linux x86_64 + aarch64

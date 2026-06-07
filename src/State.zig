@@ -10,36 +10,54 @@ pub const State = enum {
 const STATE_DIR = "/var/lib/fella";
 const STATE_FILE = "/var/lib/fella/state";
 
-pub fn load() !State {
-    const fd = std.posix.openatZ(-100, STATE_FILE, .{ .ACCMODE = .RDONLY }, 0) catch |err| switch (err) {
-        error.FileNotFound => return .off,
-        else => return err,
-    };
-    defer _ = std.os.linux.close(fd);
+pub fn serialize(s: State) []const u8 {
+    return @tagName(s);
+}
 
-    var buf: [64]u8 = undefined;
-    const n = try std.posix.read(fd, &buf);
-    const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
-
+pub fn parse(text: []const u8) State {
+    const trimmed = std.mem.trim(u8, text, " \n\r\t");
     if (std.mem.eql(u8, trimmed, "off")) return .off;
     if (std.mem.eql(u8, trimmed, "init")) return .init;
     if (std.mem.eql(u8, trimmed, "hardened")) return .hardened;
     if (std.mem.eql(u8, trimmed, "lockdown")) return .lockdown;
-
     return .off;
 }
 
-pub fn save(s: State) !void {
-    const rc = std.os.linux.mkdir(STATE_DIR, 0o700);
-    if (rc < 0) {
-        const err = std.posix.errno(rc);
-        if (err != .EXIST) return error.MkdirFailed;
-    }
+/// Load raw bytes from state file. Caller must free returned slice.
+pub fn loadRaw(alloc: std.mem.Allocator) !?[]u8 {
+    const fd = std.posix.openatZ(-100, STATE_FILE, .{ .ACCMODE = .RDONLY }, 0) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer _ = std.os.linux.close(fd);
+
+    var buf: [256]u8 = undefined;
+    const n = try std.posix.read(fd, &buf);
+    const copy = try alloc.dupe(u8, buf[0..n]);
+    return copy;
+}
+
+/// Save raw bytes to state file.
+pub fn saveRaw(data: []const u8) !void {
+    _ = std.os.linux.mkdir(STATE_DIR, 0o700);
 
     const fd = try std.posix.openatZ(-100, STATE_FILE, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600);
     defer _ = std.os.linux.close(fd);
+    _ = std.os.linux.write(fd, data.ptr, data.len);
+}
 
-    const text = @tagName(s);
-    _ = std.os.linux.write(fd, text.ptr, text.len);
-    _ = std.os.linux.write(fd, "\n", 1);
+pub fn load() !State {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const raw = try loadRaw(alloc) orelse return .off;
+    return parse(raw);
+}
+
+pub fn save(s: State) !void {
+    const text = serialize(s);
+    var buf: [64]u8 = undefined;
+    const data = std.fmt.bufPrint(&buf, "{s}\n", .{text}) catch text;
+    try saveRaw(data);
 }
