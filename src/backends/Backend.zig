@@ -1,21 +1,25 @@
 const std = @import("std");
 const Tor = @import("Tor.zig");
 const WireGuard = @import("WireGuard.zig");
+const Chain = @import("Chain.zig");
 const Output = @import("../Output.zig");
 
 pub const Kind = enum {
     tor,
     wireguard,
+    chain,
 };
 
 pub const Instance = union(Kind) {
     tor: Tor,
     wireguard: WireGuard,
+    chain: Chain,
 
     pub fn create(kind: Kind) @This() {
         return switch (kind) {
             .tor => .{ .tor = Tor.create() },
             .wireguard => .{ .wireguard = WireGuard.create() },
+            .chain => .{ .chain = Chain.create() },
         };
     }
 
@@ -23,6 +27,7 @@ pub const Instance = union(Kind) {
         return switch (self.*) {
             .tor => |*b| b.start(io, alloc),
             .wireguard => |*b| b.start(io, alloc),
+            .chain => |*b| b.start(io, alloc),
         };
     }
 
@@ -30,6 +35,7 @@ pub const Instance = union(Kind) {
         return switch (self.*) {
             .tor => |*b| b.stop(io, alloc),
             .wireguard => |*b| b.stop(io, alloc),
+            .chain => |*b| b.stop(io, alloc),
         };
     }
 
@@ -37,6 +43,7 @@ pub const Instance = union(Kind) {
         return switch (self.*) {
             .tor => |*b| b.rotate(io, alloc),
             .wireguard => |*b| b.rotate(io, alloc),
+            .chain => |*b| b.rotate(io, alloc),
         };
     }
 
@@ -44,6 +51,7 @@ pub const Instance = union(Kind) {
         return switch (self.*) {
             .tor => |*b| b.isRunning(),
             .wireguard => |*b| b.isRunning(),
+            .chain => |*b| b.isRunning(),
         };
     }
 
@@ -51,6 +59,7 @@ pub const Instance = union(Kind) {
         return switch (self.*) {
             .tor => "tor",
             .wireguard => "wireguard",
+            .chain => "chain",
         };
     }
 

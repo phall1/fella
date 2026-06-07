@@ -1,7 +1,7 @@
 # fella Development Status
 
 > Last updated: 2026-06-07
-> Current version: 0.4.0-dev "Chain"
+> Current version: 0.4.0 "Chain"
 
 ## Module Status
 
@@ -12,6 +12,8 @@
 | **Identity Rotation** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Tor Backend** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **WireGuard Backend** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Chain Backend (VPN→Tor)** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| **Cover Traffic** | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
 | **Killswitch** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Container Hardening** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Verification** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -54,17 +56,23 @@
 - [x] Atomic `iptables-restore` / `ip6tables-restore` killswitch
 - [x] Silent cleanup
 
-### v0.4.0 "Chain" In Progress
+### v0.4.0 "Chain" Completed
 - [x] seccomp-bpf sandbox (15 high-leverage syscalls blocked)
 - [x] Backend plugin architecture with union-based `Backend.Instance`
 - [x] WireGuard backend skeleton (`wg` + `ip` integration)
-- [ ] WireGuard end-to-end test with real endpoint
-- [ ] Backend chaining: VPN → Tor
+- [x] Chain backend: VPN → Tor nested tunneling
+- [x] Cover traffic padding daemon (`start --cover`, `cover start|stop`)
+- [x] `Makefile` with `install` / `uninstall` / `test` / `validate`
+- [x] `scripts/install.sh` for clone+build and curl-pipe install
+
+### Next Sprint (v0.5 — "Browser")
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
+- [ ] WireGuard real-endpoint integration test
+- [ ] Chain backend real-endpoint integration test
 
 ### Backlog
 - [ ] macOS platform support
-- [ ] Traffic padding / cover traffic
+- [ ] Traffic shaping / QoS controls
 - [ ] Interactive passphrase prompt (when Zig supports it)
 
 ## Blockers
@@ -95,9 +103,12 @@ Status: 1/1 PASS
 
 ## Release Target
 
-**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf
-- Swappable backend union: Tor (production-ready) and WireGuard (config-driven)
+**v0.4.0 "Chain"** — Backend plugin architecture + seccomp-bpf + cover traffic + install
+- Swappable backends: Tor, WireGuard, Chain (VPN→Tor)
 - seccomp-bpf deny-list: ptrace, userfaultfd, kexec, module loading, bpf, keyctl, etc.
 - `PR_SET_NO_NEW_PRIVS` to prevent privilege escalation in child processes
+- Cover traffic daemon with decoy URL fetches through the tunnel
+- `make` / `make install` / `make uninstall` / `make validate-all`
+- `scripts/install.sh` for one-line install
 - All v0.3.0 "Ghost" features retained
-- Real integration (4 tests) + E2E (1 test) passing on both backends where applicable
+- Real integration (4 tests) + E2E (1 test) passing on Tor backend

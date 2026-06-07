@@ -8,7 +8,7 @@ const Backend = @import("backends/Backend.zig");
 const BANNER =
     \\   _____     __
     \\  / __(_)__ / /  ___ ___
-    \\ / _// (_-< / _ \/ -_) _ \
+    \\ / _// (_-\< / _ \/ -_) _ \
     \\\/_/ /_/___/_//_/\__/_//_/
     \\
 ;
@@ -17,9 +17,10 @@ const params = clap.parseParamsComptime(
     \\-h, --help      Display this help and exit.
     \\-v, --version    Display version and exit.
     \\--encrypt       Encrypt state file (init only)
-    \\--backend <str> Backend: tor | wireguard (default: tor)
+    \\--backend <str> Backend: tor | wireguard | chain (default: tor)
+    \\--cover         Enable cover traffic padding
     \\<str>
-    \\
+    \\ 
 );
 
 fn printBanner(io: std.Io, alloc: std.mem.Allocator) !void {
@@ -30,27 +31,37 @@ fn printHelp(io: std.Io) !void {
     try Output.stdoutWrite(io,
         \\
 
-        \\Usage: fella <command>
+        \\Usage: fella \<command\>
         \\
         \\Commands:
-        \\  init             First-time setup, probe environment
-        \\  init --encrypt   Enable encrypted state storage (or: --encrypt init)
-        \\  init --backend wireguard   Select WireGuard backend
-        \\  start            Activate identity + backend + basic killswitch
-        \\  lockdown         Full strict mode (tor-only traffic)
-        \\  stop             Deactivate everything, restore system
-        \\  rotate           New identity + new tor circuit
-        \\  status           Full posture report
-        \\  verify           Run leak and health tests
-        \\  shell            Drop into tor-routed subshell
-        \\  exec <cmd>       Run a single command in the tor-routed namespace
-        \\  wipe             Clear session artifacts (secure overwrite)
-        \\  harden           Apply environment patches
-        \\  doctor           Diagnose environment and installation
-        \\  help             Show this message
-        \\  version          Show version
+        \\  init                  First-time setup, probe environment
+        \\  init --encrypt        Enable encrypted state storage
+        \\  init --backend \<k\>    Select backend: tor | wireguard | chain
+        \\  start                 Activate identity + backend + containment
+        \\  start --cover         Enable cover traffic padding
+        \\  lockdown              Full strict mode (backend-only traffic)
+        \\  lockdown --cover      Strict mode with cover traffic
+        \\  stop                  Deactivate everything, restore system
+        \\  rotate                New identity + new backend circuit
+        \\  status                Full posture report
+        \\  verify                Run leak and health tests
+        \\  shell                 Drop into routed subshell
+        \\  exec \<cmd\>           Run a single command in the routed namespace
+        \\  wipe                  Clear session artifacts (secure overwrite)
+        \\  harden                Apply environment patches
+        \\  cover start           Start cover traffic daemon
+        \\  cover stop            Stop cover traffic daemon
+        \\  doctor                Diagnose environment and installation
+        \\  help                  Show this message
+        \\  version               Show version
         \\
     );
+}
+
+fn parseBackend(s: []const u8) Backend.Kind {
+    if (std.mem.eql(u8, s, "wireguard")) return .wireguard;
+    if (std.mem.eql(u8, s, "chain")) return .chain;
+    return .tor;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -80,7 +91,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (res.args.version != 0) {
-        try Output.stdoutPrint(io, alloc, "fella 0.3.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.4.0\n", .{});
         return;
     }
 
@@ -114,10 +125,18 @@ pub fn main(init: std.process.Init) !void {
         try engine.?.init(io, alloc, encrypt, backend_kind);
     } else if (std.mem.eql(u8, cmd, "start")) {
         try printBanner(io, alloc);
-        try engine.?.start(io, alloc);
+        var with_cover = res.args.cover != 0;
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--cover")) with_cover = true;
+        }
+        try engine.?.start(io, alloc, with_cover);
     } else if (std.mem.eql(u8, cmd, "lockdown")) {
         try printBanner(io, alloc);
-        try engine.?.lockdown(io, alloc);
+        var with_cover = res.args.cover != 0;
+        while (iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--cover")) with_cover = true;
+        }
+        try engine.?.lockdown(io, alloc, with_cover);
     } else if (std.mem.eql(u8, cmd, "stop")) {
         try engine.?.stop(io, alloc);
     } else if (std.mem.eql(u8, cmd, "rotate")) {
@@ -143,13 +162,26 @@ pub fn main(init: std.process.Init) !void {
         try engine.?.wipe(io, alloc);
     } else if (std.mem.eql(u8, cmd, "harden")) {
         try engine.?.harden(io, alloc);
+    } else if (std.mem.eql(u8, cmd, "cover")) {
+        const sub = iter.next() orelse {
+            try Output.stderrWrite(io, "Usage: fella cover start|stop\n");
+            std.process.exit(1);
+        };
+        if (std.mem.eql(u8, sub, "start")) {
+            try engine.?.coverStart(io, alloc);
+        } else if (std.mem.eql(u8, sub, "stop")) {
+            try engine.?.coverStop(io, alloc);
+        } else {
+            try Output.stderrWrite(io, "Usage: fella cover start|stop\n");
+            std.process.exit(1);
+        }
     } else if (std.mem.eql(u8, cmd, "doctor")) {
         try printBanner(io, alloc);
         try engine.?.doctor(io, alloc);
     } else if (std.mem.eql(u8, cmd, "help")) {
         try printHelp(io);
     } else if (std.mem.eql(u8, cmd, "version")) {
-        try Output.stdoutPrint(io, alloc, "fella 0.3.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.4.0\n", .{});
     } else {
         try Output.stderrWrite(io, "Unknown command: ");
         try Output.stderrWrite(io, cmd);
@@ -159,13 +191,8 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-fn parseBackend(s: []const u8) Backend.Kind {
-    if (std.mem.eql(u8, s, "wireguard")) return .wireguard;
-    return .tor;
-}
-
 fn needsEnv(cmd: []const u8) bool {
-    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "doctor" };
+    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "doctor" };
     inline for (env_cmds) |c| {
         if (std.mem.eql(u8, cmd, c)) return true;
     }

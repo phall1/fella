@@ -26,7 +26,7 @@ Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 - **Fail-closed by design** — if the backend drops, your traffic drops, not leaks
 - **Forensic resistance** — encrypted state, secure memory (`mlock` + `MADV_DONTDUMP`), 3-pass anti-forensic wipe
 - **Runtime self-protection** — seccomp-bpf sandbox blocks `ptrace`, `userfaultfd`, kernel module loading, and other high-leverage attack primitives
-- **Backend plugin architecture** — Tor today, WireGuard tomorrow, chained VPN→Tor after that
+- **Backend plugin architecture** — Tor, WireGuard, or chained VPN→Tor
 
 ## What It Does
 
@@ -39,6 +39,8 @@ Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 | 🛡️ **Sandbox** | seccomp-bpf deny-list blocks 15+ dangerous syscalls |
 | 🧬 **Hardening** | Container fingerprint spoofing via `/proc` bind-mounts + LD_PRELOAD `libfella.so` |
 | 🧹 **Wipe** | 3-pass overwrite (random → complement → random) + `fsync` for session artifacts |
+| 🔗 **Chain** | VPN → Tor chaining (`--backend chain`) for nested tunneling |
+| 🎲 **Cover** | Decoy traffic padding inside the netns to frustrate traffic analysis |
 | 🔐 **Crypto** | XChaCha20-Poly1305 encrypted state via `init --encrypt` |
 | ✅ **Verify** | Tor confirmation, IP exposure, direct bypass leak tests |
 
@@ -53,9 +55,11 @@ zig build
 # Initialize (pick your backend)
 sudo ./zig-out/bin/fella init
 sudo ./zig-out/bin/fella init --backend wireguard   # requires /var/lib/fella/wireguard.conf
+sudo ./zig-out/bin/fella init --backend chain       # VPN -> Tor, requires wireguard.conf
 
 # Activate
-sudo ./zig-out/bin/fella start          # identity + backend + netns + killswitch + seccomp
+sudo ./zig-out/bin/fella start                      # identity + backend + netns + killswitch + seccomp
+sudo ./zig-out/bin/fella start --cover              # ...plus decoy traffic padding
 
 # Use
 sudo ./zig-out/bin/fella shell          # drop into routed subshell
@@ -106,9 +110,13 @@ curl -sL https://raw.githubusercontent.com/phall1/fella/main/scripts/install.sh 
 ```
 fella init                  Probe environment, first-time setup
 fella init --encrypt        Enable encrypted state storage
-fella init --backend <k>    Select backend: tor | wireguard
+fella init --backend <k>    Select backend: tor | wireguard | chain
 fella start                 Activate identity + backend + containment
+fella start --cover         Enable cover traffic padding
 fella lockdown              Strict killswitch (backend-only traffic)
+fella lockdown --cover      Strict mode with cover traffic
+fella cover start           Start cover traffic daemon
+fella cover stop            Stop cover traffic daemon
 fella stop                  Deactivate everything, restore system
 fella rotate                New identity + rotate backend circuits
 fella status                Show current posture
@@ -151,7 +159,7 @@ Backends are swappable unions implementing `start`, `stop`, `rotate`, and `isRun
 
 ```zig
 const Backend = @import("backends/Backend.zig");
-const Kind = Backend.Kind;  // .tor | .wireguard
+const Kind = Backend.Kind;  // .tor | .wireguard | .chain
 
 var b = Backend.create(Kind.tor);
 try b.start(io, alloc);
@@ -187,6 +195,33 @@ Activate with:
 ```bash
 sudo ./zig-out/bin/fella init --backend wireguard
 sudo ./zig-out/bin/fella start
+```
+
+### Chained Backend (VPN → Tor)
+
+Layer Tor on top of WireGuard. Your exit IP is a Tor exit node, but Tor's own traffic flows through the WireGuard tunnel first.
+
+```bash
+sudo cp your-wireguard.conf /var/lib/fella/wireguard.conf
+sudo ./zig-out/bin/fella init --backend chain
+sudo ./zig-out/bin/fella start
+```
+
+The chain path is:
+
+```
+netns app → torsocks → Tor SOCKS (host) → Tor outbound bound to WG IP → WireGuard tunnel
+```
+
+### Cover Traffic
+
+Traffic analysis is harder when there is no silence. Enable a background daemon that fetches decoy URLs through the tunnel at random 30–180s intervals:
+
+```bash
+sudo ./zig-out/bin/fella start --cover
+# or manually
+sudo ./zig-out/bin/fella cover start
+sudo ./zig-out/bin/fella cover stop
 ```
 
 ## Security Model
@@ -229,10 +264,11 @@ sudo ./scripts/validate.sh --all
 - [x] Atomic `iptables-restore` killswitch
 - [x] Silent cleanup / no stderr noise
 
-### v0.4.0 "Chain" 🚧
+### v0.4.0 "Chain" ✅
 - [x] seccomp-bpf sandbox
-- [x] Backend plugin architecture (Tor, WireGuard)
-- [ ] Backend chaining: VPN → Tor
+- [x] Backend plugin architecture (Tor, WireGuard, Chain)
+- [x] Backend chaining: VPN → Tor (`--backend chain`)
+- [x] Cover traffic padding (`start --cover`, `fella cover start|stop`)
 - [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
 
 See [docs/tracking/status.md](docs/tracking/status.md) and [docs/tracking/nation-state-roadmap.md](docs/tracking/nation-state-roadmap.md) for the full gap analysis.

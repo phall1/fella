@@ -12,6 +12,7 @@ const Passphrase = @import("Passphrase.zig");
 const Crypto = @import("Crypto.zig");
 const Wipe = @import("Wipe.zig");
 const Sandbox = @import("Sandbox.zig");
+const Cover = @import("Cover.zig");
 
 const BACKEND_FILE = "/var/lib/fella/backend_kind";
 
@@ -43,6 +44,7 @@ fn loadBackendKind() Backend.Kind {
     const n = std.posix.read(fd, &buf) catch return .tor;
     const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (std.mem.eql(u8, trimmed, "wireguard")) return .wireguard;
+    if (std.mem.eql(u8, trimmed, "chain")) return .chain;
     return .tor;
 }
 
@@ -142,7 +144,7 @@ pub fn init(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, encrypt: boo
     try Output.stdoutPrint(io, alloc_v, "{s}[+] fella initialized{s}\n", .{ Output.Color.green, Output.Color.reset });
 }
 
-pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool) !void {
     try Output.stdoutPrint(io, alloc_v, "[+] Rotating identity...\n", .{});
     Identity.rotate(alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity rotation failed: {any}\n", .{err});
@@ -152,6 +154,13 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try self.backend.start(io, alloc_v);
     try self.ks.enableBasic(io, alloc_v);
 
+    if (with_cover) {
+        Cover.start(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Cover traffic failed: {any}\n", .{err});
+        };
+    }
+
+    // Lock down this process after Tor and netns are set up.
     var sandbox_ok = true;
     Sandbox.apply(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Sandbox setup failed: {any}\n", .{err});
@@ -162,7 +171,7 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc_v, "    [*] Backend: {s} | Use 'fella shell' for routed subshell\n", .{self.backend.name()});
 }
 
-pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover: bool) !void {
     try Output.stdoutPrint(io, alloc_v, "[+] Rotating identity...\n", .{});
     Identity.rotate(alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity rotation failed: {any}\n", .{err});
@@ -173,10 +182,14 @@ pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try self.backend.start(io, alloc_v);
     try self.ks.enableStrict(io, alloc_v);
 
-    var sandbox_ok = true;
+    if (with_cover) {
+        Cover.start(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Cover traffic failed: {any}\n", .{err});
+        };
+    }
+
     Sandbox.apply(io, alloc_v) catch |err| {
         try Output.stdoutPrint(io, alloc_v, "    [!] Sandbox setup failed: {any}\n", .{err});
-        sandbox_ok = false;
     };
     try self.transition(.lockdown);
     try Output.stdoutPrint(io, alloc_v, "{s}[+] LOCKDOWN ACTIVE{s}\n", .{ Output.Color.green, Output.Color.reset });
@@ -189,6 +202,7 @@ pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
         try Output.stdoutPrint(io, alloc_v, "    [!] Identity restore failed: {any}\n", .{err});
     };
 
+    Cover.stop(io, alloc_v) catch {};
     try self.backend.stop(io, alloc_v);
     try self.ks.disable(io, alloc_v);
     Harden.revert(io, alloc_v) catch |err| {
@@ -291,4 +305,14 @@ pub fn doctor(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc_v, "  NET_ADMIN:      {}\n", .{self.env.has_net_admin});
     try Output.stdoutPrint(io, alloc_v, "  Can compile C:  {}\n", .{self.env.can_compile_c});
     try Sandbox.describe(io, alloc_v);
+}
+
+pub fn coverStart(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    _ = self;
+    try Cover.start(io, alloc_v);
+}
+
+pub fn coverStop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    _ = self;
+    try Cover.stop(io, alloc_v);
 }

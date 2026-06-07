@@ -15,6 +15,21 @@ const TORRC_TEMPLATE =
     \\
 ;
 
+const TORRC_CHAINED_TEMPLATE =
+    \\SOCKSPort 127.0.0.1:9050
+    \\SOCKSPort 10.200.200.1:9050
+    \\DNSPort 127.0.0.1:5353
+    \\DNSPort 10.200.200.1:5353
+    \\ControlPort 127.0.0.1:9051
+    \\OutboundBindAddress {s}
+    \\DataDirectory {s}
+    \\DisableDebuggerAttachment 1
+    \\UseEntryGuards 1
+    \\Sandbox 1
+    \\Log notice file {s}
+    \\
+;
+
 const DATA_DIR = "/var/lib/fella/tor";
 const PID_FILE = "/var/lib/fella/tor.pid";
 const LOG_FILE = "/var/lib/fella/tor/tor.log";
@@ -57,6 +72,14 @@ fn clearPid() void {
 }
 
 pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
+    return self.startInternal(io, alloc, null);
+}
+
+pub fn startChained(self: *@This(), io: std.Io, alloc: std.mem.Allocator, bind_addr: []const u8) !void {
+    return self.startInternal(io, alloc, bind_addr);
+}
+
+fn startInternal(self: *@This(), io: std.Io, alloc: std.mem.Allocator, bind_addr: ?[]const u8) !void {
     if (self.status == .running) {
         try Output.stdoutPrint(io, alloc, "[*] Tor already running\n", .{});
         return;
@@ -72,8 +95,11 @@ pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     }
 
     // Write torrc
-    var torrc_buf: [1024]u8 = undefined;
-    const torrc = try std.fmt.bufPrint(&torrc_buf, TORRC_TEMPLATE, .{ DATA_DIR, LOG_FILE });
+    var torrc_buf: [2048]u8 = undefined;
+    const torrc = if (bind_addr) |addr|
+        try std.fmt.bufPrint(&torrc_buf, TORRC_CHAINED_TEMPLATE, .{ addr, DATA_DIR, LOG_FILE })
+    else
+        try std.fmt.bufPrint(&torrc_buf, TORRC_TEMPLATE, .{ DATA_DIR, LOG_FILE });
     try writeFile(TORRC_FILE, torrc);
 
     // Fork and exec tor
