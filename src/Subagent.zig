@@ -83,24 +83,17 @@ pub fn stopAll(io: std.Io, alloc: std.mem.Allocator) void {
     }
 }
 
-// Constant-rate padding parameters.
-// Sends a fixed-size HTTP request every PADDING_INTERVAL_MS.
-// This creates a near-constant-rate tunnel stream that defeats
-// size/timing correlation attacks against Tor.
-const PADDING_INTERVAL_MS: i64 = 100;
-const PADDING_SIZE: usize = 1024;
-const PADDING_TIMEOUT_S: i64 = 5;
+// Cover traffic padding parameters.
+// Sends a lightweight HTTP GET through Tor at a low, jittered rate.
+// This adds background noise without becoming a self-DoS.
+const PADDING_INTERVAL_MIN_S: i64 = 30;
+const PADDING_INTERVAL_MAX_S: i64 = 120;
+const PADDING_TIMEOUT_S: i64 = 10;
 
 const DECOY_URLS = [_][]const u8{
     "https://www.wikipedia.org/",
-    "https://www.reddit.com/",
-    "https://news.ycombinator.com/",
-    "https://www.bbc.com/",
-    "https://github.com/",
-    "https://www.apache.org/",
     "https://www.debian.org/",
     "https://archlinux.org/",
-    "https://www.kernel.org/",
     "https://www.eff.org/",
 };
 
@@ -109,21 +102,6 @@ test "DECOY_URLS is non-empty and all HTTPS" {
     for (DECOY_URLS) |url| {
         try std.testing.expect(std.mem.startsWith(u8, url, "https://"));
     }
-}
-
-test "hex encoding produces correct length and characters" {
-    var payload_buf: [PADDING_SIZE]u8 = undefined;
-    @memset(&payload_buf, 0xAB);
-    var payload_hex: [PADDING_SIZE * 2 + 1]u8 = undefined;
-    for (payload_buf[0..PADDING_SIZE], 0..) |b, i| {
-        const hi: u8 = b >> 4;
-        const lo: u8 = b & 0x0f;
-        payload_hex[i * 2] = if (hi < 10) '0' + hi else 'a' + (hi - 10);
-        payload_hex[i * 2 + 1] = if (lo < 10) '0' + lo else 'a' + (lo - 10);
-    }
-    payload_hex[PADDING_SIZE * 2] = 0;
-    try std.testing.expectEqual(PADDING_SIZE * 2, std.mem.indexOf(u8, &payload_hex, &[_]u8{0}).?);
-    try std.testing.expectEqualStrings("ab", payload_hex[0..2]);
 }
 
 fn runCoverLoop() void {
@@ -135,8 +113,9 @@ fn runCoverLoop() void {
 
     while (true) {
         const idx = rand.int(u32) % DECOY_URLS.len;
-        fetchPadding(DECOY_URLS[idx], PADDING_SIZE);
-        _ = std.os.linux.nanosleep(&.{ .sec = 0, .nsec = @intCast(PADDING_INTERVAL_MS * 1_000_000) }, null);
+        fetchPadding(DECOY_URLS[idx]);
+        const sleep_s = rand.intRangeAtMost(i64, PADDING_INTERVAL_MIN_S, PADDING_INTERVAL_MAX_S);
+        _ = std.os.linux.nanosleep(&.{ .sec = sleep_s, .nsec = 0 }, null);
     }
 }
 
@@ -155,24 +134,12 @@ fn runMacRotateLoop() void {
     }
 }
 
-fn fetchPadding(url: []const u8, size: usize) void {
-    // Generate a fixed-size random payload so every request has identical size.
-    var payload_buf: [PADDING_SIZE]u8 = undefined;
-    _ = std.os.linux.getrandom(&payload_buf, size, 0);
-    var payload_hex: [PADDING_SIZE * 2 + 1]u8 = undefined;
-    for (payload_buf[0..size], 0..) |b, i| {
-        const hi: u8 = b >> 4;
-        const lo: u8 = b & 0x0f;
-        payload_hex[i * 2] = if (hi < 10) '0' + hi else 'a' + (hi - 10);
-        payload_hex[i * 2 + 1] = if (lo < 10) '0' + lo else 'a' + (lo - 10);
-    }
-    payload_hex[size * 2] = 0;
-
-    var script_buf: [4096]u8 = undefined;
+fn fetchPadding(url: []const u8) void {
+    var script_buf: [512]u8 = undefined;
     const script = std.fmt.bufPrint(
         &script_buf,
-        "#!/bin/sh\nexport TORSOCKS_CONF_FILE=/var/lib/fella/torsocks.conf\n/usr/bin/torsocks curl -fsS --max-time {d} -X POST -d '{s}' '{s}' 2>/dev/null\n",
-        .{ PADDING_TIMEOUT_S, payload_hex[0 .. size * 2], url },
+        "#!/bin/sh\nexport TORSOCKS_CONF_FILE=/var/lib/fella/torsocks.conf\n/usr/bin/torsocks curl -fsS --max-time {d} -o /dev/null '{s}' 2>/dev/null\n",
+        .{ PADDING_TIMEOUT_S, url },
     ) catch return;
 
     const path = "/tmp/fella_padding.sh";

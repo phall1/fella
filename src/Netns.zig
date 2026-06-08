@@ -50,6 +50,11 @@ pub fn create(io: std.Io, alloc: std.mem.Allocator) !void {
     // Host NAT for netns traffic
     try runIptables(alloc, &.{ "-t", "nat", "-A", "POSTROUTING", "-s", SUBNET, "-j", "MASQUERADE" });
 
+    // Default route inside netns so non-torsocks apps can at least attempt routing
+    runIpNs(alloc, &.{ "route", "add", "default", "via", HOST_IP, "dev", VETH_NS }) catch {
+        // May already exist on re-create; ignore
+    };
+
     // Netns firewall: drop everything by default, only allow Tor/DNS to host
     try runIptablesNs(alloc, &.{ "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT" });
     try runIptablesNs(alloc, &.{ "-A", "OUTPUT", "-p", "tcp", "-d", HOST_IP, "--dport", "9050", "-j", "ACCEPT" });
@@ -71,7 +76,7 @@ pub fn destroy(io: std.Io, alloc: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc, "    [+] Namespace removed\n", .{});
 }
 
-fn destroyQuiet() void {
+pub fn destroyQuiet() void {
     _ = runCmdSilent(&.{ "iptables", "-t", "nat", "-D", "POSTROUTING", "-s", SUBNET, "-j", "MASQUERADE" });
     _ = runCmdSilent(&.{ "ip", "link", "del", VETH_HOST });
     _ = runCmdSilent(&.{ "ip", "netns", "del", NS_NAME });
@@ -88,6 +93,16 @@ pub fn execNs(io: std.Io, alloc: std.mem.Allocator, argv: []const []const u8) !v
         try Output.stdoutPrint(io, alloc, "{s}[!] No active fella namespace. Run 'fella start' first.{s}\n", .{ Output.Color.red, Output.Color.reset });
         return error.NetnsNotFound;
     }
+
+    // Warn about LD_PRELOAD limitation
+    if (argv.len > 0) {
+        const bin_name = std.fs.path.basename(argv[0]);
+        if (isLikelyStaticBinary(bin_name)) {
+            try Output.stdoutPrint(io, alloc, "{s}[!] Warning: {s} may be statically linked. torsocks LD_PRELOAD will not work.{s}\n", .{ Output.Color.yellow, bin_name, Output.Color.reset });
+            try Output.stdoutPrint(io, alloc, "    [*] Configure the app to use SOCKS5 proxy 10.200.200.1:9050 directly\n", .{});
+        }
+    }
+
     var full_argv: std.ArrayList([]const u8) = .empty;
     defer full_argv.deinit(alloc);
 
@@ -101,6 +116,15 @@ pub fn execNs(io: std.Io, alloc: std.mem.Allocator, argv: []const []const u8) !v
     }
 
     try runCmdArgv(full_argv.items);
+}
+
+fn isLikelyStaticBinary(name: []const u8) bool {
+    // Common statically-linked binaries that bypass LD_PRELOAD
+    const static_bins = [_][]const u8{ "go", "terraform", "kubectl", "docker" };
+    for (static_bins) |s| {
+        if (std.mem.eql(u8, name, s)) return true;
+    }
+    return false;
 }
 
 pub fn shell(io: std.Io, alloc: std.mem.Allocator) !void {

@@ -4,9 +4,12 @@ const Tor = @import("Tor.zig");
 
 const WG_IFACE = "wg-fella";
 const WG_CONF = "/var/lib/fella/wireguard.conf";
+const ROUTE_TABLE = "100";
+const ROUTE_TABLE_NAME = "fella";
 
 status: Status,
 tor: Tor,
+wg_addr: ?[]const u8,
 
 pub const Status = enum {
     stopped,
@@ -15,7 +18,7 @@ pub const Status = enum {
 };
 
 pub fn create() @This() {
-    return .{ .status = .stopped, .tor = Tor.create() };
+    return .{ .status = .stopped, .tor = Tor.create(), .wg_addr = null };
 }
 
 pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
@@ -36,7 +39,8 @@ pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     };
     defer alloc.free(conf);
 
-    // Tear down any stale interface
+    // Tear down any stale state
+    teardownPolicyRoutes();
     _ = runCmdSilent(&.{ "ip", "link", "del", WG_IFACE });
 
     // Create WireGuard interface in the HOST namespace (underlay)
@@ -46,13 +50,21 @@ pub fn start(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
 
     // Extract the Address from the WireGuard config to use as OutboundBindAddress
     const wg_addr = extractAddress(conf) orelse "0.0.0.0";
+    self.wg_addr = try alloc.dupe(u8, wg_addr);
     try Output.stdoutPrint(io, alloc, "    [*] WireGuard underlay up ({s})\n", .{wg_addr});
 
-    // Add a host route so Tor's outbound traffic prefers the tunnel.
-    // We route default through the WG interface if AllowedIPs is 0.0.0.0/0.
-    if (hasAllowedIPs0(conf)) {
-        runCmd(alloc, &.{ "ip", "route", "add", "default", "dev", WG_IFACE }) catch {
-            try Output.stdoutPrint(io, alloc, "    [!] Could not set default route through {s}\n", .{WG_IFACE});
+    // Use policy routing: only traffic FROM the WG IP uses the tunnel.
+    // This prevents hijacking the host's default route.
+    if (!std.mem.eql(u8, wg_addr, "0.0.0.0") and hasAllowedIPs0(conf)) {
+        // Ensure routing table exists
+        _ = runCmdSilent(&.{ "ip", "route", "flush", "table", ROUTE_TABLE });
+        // Add default route in custom table
+        runCmd(alloc, &.{ "ip", "route", "add", "default", "dev", WG_IFACE, "table", ROUTE_TABLE }) catch {
+            try Output.stdoutPrint(io, alloc, "    [!] Could not add route in table {s}\n", .{ROUTE_TABLE});
+        };
+        // Add policy rule: traffic from WG IP uses this table
+        runCmd(alloc, &.{ "ip", "rule", "add", "from", wg_addr, "lookup", ROUTE_TABLE }) catch {
+            try Output.stdoutPrint(io, alloc, "    [!] Could not add policy rule for {s}\n", .{wg_addr});
         };
     }
 
@@ -69,8 +81,12 @@ pub fn stop(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
         return;
     }
     try self.tor.stop(io, alloc);
-    _ = runCmdSilent(&.{ "ip", "route", "del", "default", "dev", WG_IFACE });
+    teardownPolicyRoutes();
     _ = runCmdSilent(&.{ "ip", "link", "del", WG_IFACE });
+    if (self.wg_addr) |addr| {
+        alloc.free(addr);
+        self.wg_addr = null;
+    }
     self.status = .stopped;
     try Output.stdoutPrint(io, alloc, "    [+] Chain stopped\n", .{});
 }
@@ -82,6 +98,11 @@ pub fn rotate(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
 
 pub fn isRunning(self: *const @This()) bool {
     return self.status == .running and self.tor.isRunning();
+}
+
+fn teardownPolicyRoutes() void {
+    _ = runCmdSilent(&.{ "ip", "rule", "del", "lookup", ROUTE_TABLE });
+    _ = runCmdSilent(&.{ "ip", "route", "flush", "table", ROUTE_TABLE });
 }
 
 fn hasBinary(name: []const u8) bool {

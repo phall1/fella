@@ -293,6 +293,12 @@ pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
         try Output.stdoutPrint(io, alloc_v, "    [!] Netns destroy failed: {any}\n", .{err});
     };
 
+    if (self.env.primary_iface.len > 0) {
+        Mac.restoreHost(io, alloc_v, self.env.primary_iface) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Host MAC restore failed: {any}\n", .{err});
+        };
+    }
+
     if (Ephemeral.isMounted()) {
         Ephemeral.unmount(io, alloc_v) catch |err| {
             try Output.stdoutPrint(io, alloc_v, "    [!] Ephemeral unmount failed: {any}\n", .{err});
@@ -330,6 +336,18 @@ pub fn status(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc_v, "Ephemeral:  {s}\n", .{if (Ephemeral.isMounted()) "RAM-only" else "disk"});
 }
 
+pub fn statusJson(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    const json = try std.fmt.allocPrint(alloc_v, "{{\"backend\":\"{s}\",\"state\":\"{s}\",\"killswitch\":\"{s}\",\"seccomp\":{},\"ephemeral\":{}}}\n", .{
+        self.backend.name(),
+        @tagName(self.state),
+        @tagName(self.ks.mode),
+        Sandbox.isActive(),
+        Ephemeral.isMounted(),
+    });
+    defer alloc_v.free(json);
+    try Output.stdoutWrite(io, json);
+}
+
 pub fn verify(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     _ = self;
     try Output.stdoutPrint(io, alloc_v, "[+] Running verification...\n", .{});
@@ -365,6 +383,52 @@ pub fn verify(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     }
 
     try Output.stdoutPrint(io, alloc_v, "\n{s}[*] Verify complete{s} — pass={d} fail={d} warn={d}\n", .{ Output.Color.blue, Output.Color.reset, pass, fail, warn });
+}
+
+pub fn verifyJson(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    _ = self;
+    var results: std.ArrayList(Verify.Result) = .empty;
+    defer {
+        for (results.items) |r| {
+            alloc_v.free(r.details);
+        }
+        results.deinit(alloc_v);
+    }
+
+    Verify.runAll(io, alloc_v, &results) catch |err| {
+        try Output.stdoutPrint(io, alloc_v, "{{\"error\":\"{any}\"}}\n", .{err});
+        return;
+    };
+
+    var pass: usize = 0;
+    var fail: usize = 0;
+    var warn: usize = 0;
+    for (results.items) |r| {
+        switch (r.status) {
+            .pass => pass += 1,
+            .fail => fail += 1,
+            .warn => warn += 1,
+        }
+    }
+
+    try Output.stdoutPrint(io, alloc_v, "{{\"pass\":{d},\"fail\":{d},\"warn\":{d},\"results\":[", .{ pass, fail, warn });
+    for (results.items, 0..) |r, i| {
+        if (i > 0) try Output.stdoutWrite(io, ",");
+        try Output.stdoutPrint(io, alloc_v, "{{\"name\":\"{s}\",\"status\":\"{s}\",\"details\":\"", .{ r.name, @tagName(r.status) });
+        for (r.details) |c| {
+            if (c == '"') {
+                try Output.stdoutWrite(io, "\\\"");
+            } else if (c == '\\') {
+                try Output.stdoutWrite(io, "\\\\");
+            } else if (c >= 0x20 and c < 0x7f) {
+                try Output.stdoutWrite(io, &[_]u8{c});
+            } else {
+                try Output.stdoutWrite(io, "?");
+            }
+        }
+        try Output.stdoutWrite(io, "\"}");
+    }
+    try Output.stdoutWrite(io, "]}\n");
 }
 
 pub fn shell(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
@@ -428,6 +492,19 @@ pub fn doctor(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try self.backend.statusLine(io, alloc_v);
 
     try Sandbox.describe(io, alloc_v);
+}
+
+pub fn doctorJson(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    const sa = if (self.env.has_sys_admin) "true" else "false";
+    const na = if (self.env.has_net_admin) "true" else "false";
+    const cc = if (self.env.can_compile_c) "true" else "false";
+    try Output.stdoutPrint(io, alloc_v, "{{\"virtualization\":\"{s}\",\"interface\":\"{s}\",\"sys_admin\":{s},\"net_admin\":{s},\"can_compile_c\":{s}}}\n", .{
+        self.env.virt,
+        self.env.primary_iface,
+        sa,
+        na,
+        cc,
+    });
 }
 
 fn binExists(path: []const u8) bool {

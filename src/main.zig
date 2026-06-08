@@ -4,6 +4,7 @@ const Engine = @import("Engine.zig");
 const platform = @import("platform.zig");
 const Output = @import("Output.zig");
 const Backend = @import("backends/Backend.zig");
+const TestRunner = @import("TestRunner.zig");
 
 const BANNER =
     \\   _____     __
@@ -16,6 +17,7 @@ const BANNER =
 const params = clap.parseParamsComptime(
     \\-h, --help      Display this help and exit.
     \\-v, --version    Display version and exit.
+    \\--json          Output JSON for status/verify/doctor
     \\--encrypt       Encrypt state file (init only)
     \\--backend <str> Backend: tor | wireguard | chain (default: tor)
     \\--cover         Enable cover traffic padding
@@ -57,6 +59,7 @@ fn printHelp(io: std.Io) !void {
         \\  macrotate start       Start periodic MAC rotation subagent
         \\  macrotate stop        Stop MAC rotation subagent
         \\  doctor                Diagnose environment and installation
+        \\  test                  Run built-in integration test suite
         \\  help                  Show this message
         \\  version               Show version
         \\
@@ -105,6 +108,16 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     };
 
+    // Also accept --json after the positional command by scanning raw args
+    const json_mode = res.args.json != 0 or blk: {
+        var raw_iter = try init.minimal.args.iterateAllocator(alloc);
+        defer raw_iter.deinit();
+        while (raw_iter.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--json")) break :blk true;
+        }
+        break :blk false;
+    };
+
     const env = if (needsEnv(cmd))
         try platform.probe(alloc)
     else
@@ -151,9 +164,17 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, cmd, "rotate")) {
         try engine.?.rotate(io, alloc);
     } else if (std.mem.eql(u8, cmd, "status")) {
-        try engine.?.status(io, alloc);
+        if (json_mode) {
+            try engine.?.statusJson(io, alloc);
+        } else {
+            try engine.?.status(io, alloc);
+        }
     } else if (std.mem.eql(u8, cmd, "verify")) {
-        try engine.?.verify(io, alloc);
+        if (json_mode) {
+            try engine.?.verifyJson(io, alloc);
+        } else {
+            try engine.?.verify(io, alloc);
+        }
     } else if (std.mem.eql(u8, cmd, "shell")) {
         try engine.?.shell(io, alloc);
     } else if (std.mem.eql(u8, cmd, "exec")) {
@@ -198,8 +219,18 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         }
     } else if (std.mem.eql(u8, cmd, "doctor")) {
-        try printBanner(io, alloc);
-        try engine.?.doctor(io, alloc);
+        if (!json_mode) try printBanner(io, alloc);
+        if (json_mode) {
+            try engine.?.doctorJson(io, alloc);
+        } else {
+            try engine.?.doctor(io, alloc);
+        }
+    } else if (std.mem.eql(u8, cmd, "test")) {
+        if (json_mode) {
+            try runTestJson(io, alloc);
+        } else {
+            try runTestHuman(io, alloc);
+        }
     } else if (std.mem.eql(u8, cmd, "help")) {
         try printHelp(io);
     } else if (std.mem.eql(u8, cmd, "version")) {
@@ -213,8 +244,70 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
+fn runTestHuman(io: std.Io, alloc: std.mem.Allocator) !void {
+    try Output.stdoutPrint(io, alloc, "=== fella Self-Test ===\n", .{});
+    var results: std.ArrayList(TestRunner.Result) = .empty;
+    defer {
+        for (results.items) |r| {
+            alloc.free(r.detail);
+        }
+        results.deinit(alloc);
+    }
+    TestRunner.runAll(io, alloc, &results) catch |err| {
+        try Output.stdoutPrint(io, alloc, "[!] Test runner error: {any}\n", .{err});
+    };
+
+    var pass: usize = 0;
+    var fail: usize = 0;
+    for (results.items) |r| {
+        const color = if (r.passed) Output.Color.green else Output.Color.red;
+        const status = if (r.passed) "PASS" else "FAIL";
+        try Output.stdoutPrint(io, alloc, "  {s}{s}{s} {s}: {s}\n", .{ color, status, Output.Color.reset, r.name, r.detail });
+        if (r.passed) pass += 1 else fail += 1;
+    }
+    try Output.stdoutPrint(io, alloc, "\n{s}[*] Tests complete{s} — {d}/{d} passed\n", .{ Output.Color.blue, Output.Color.reset, pass, results.items.len });
+    if (fail > 0) std.process.exit(1);
+}
+
+fn runTestJson(io: std.Io, alloc: std.mem.Allocator) !void {
+    var results: std.ArrayList(TestRunner.Result) = .empty;
+    defer {
+        for (results.items) |r| {
+            alloc.free(r.detail);
+        }
+        results.deinit(alloc);
+    }
+    TestRunner.runAll(io, alloc, &results) catch {};
+
+    var pass: usize = 0;
+    var fail: usize = 0;
+    for (results.items) |r| {
+        if (r.passed) pass += 1 else fail += 1;
+    }
+
+    try Output.stdoutPrint(io, alloc, "{{\"pass\":{d},\"fail\":{d},\"total\":{d},\"results\":[", .{ pass, fail, results.items.len });
+    for (results.items, 0..) |r, i| {
+        if (i > 0) try Output.stdoutWrite(io, ",");
+        try Output.stdoutPrint(io, alloc, "{{\"name\":\"{s}\",\"passed\":{},\"detail\":\"", .{ r.name, r.passed });
+        for (r.detail) |c| {
+            if (c == '"') {
+                try Output.stdoutWrite(io, "\\\"");
+            } else if (c == '\\') {
+                try Output.stdoutWrite(io, "\\\\");
+            } else if (c >= 0x20 and c < 0x7f) {
+                try Output.stdoutWrite(io, &[_]u8{c});
+            } else {
+                try Output.stdoutWrite(io, "?");
+            }
+        }
+        try Output.stdoutWrite(io, "\"}");
+    }
+    try Output.stdoutWrite(io, "]}\n");
+    if (fail > 0) std.process.exit(1);
+}
+
 fn needsEnv(cmd: []const u8) bool {
-    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "macrotate", "doctor" };
+    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "macrotate", "doctor", "test" };
     inline for (env_cmds) |c| {
         if (std.mem.eql(u8, cmd, c)) return true;
     }

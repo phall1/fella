@@ -308,6 +308,12 @@ On every `start`/`lockdown`, fella renames its own process to something boring l
 
 fella randomizes the MAC address of both the primary host interface and the `veth-fella-host` pair on every start/rotate. Original MACs are saved to `/var/lib/fella/original/mac/` and restored on `stop`. This breaks L2 tracking, DHCP fingerprinting, and router logging correlation.
 
+### `fella exec` and Statically-Linked Binaries
+
+`fella exec` routes traffic through Tor using `torsocks`, which works via `LD_PRELOAD`. **Statically-linked binaries** (Go, Rust with `musl`, some security tools) do not load shared libraries and therefore bypass `torsocks` entirely, leaking your real IP.
+
+> **Honest caveat:** If you run `fella exec kubectl` or a Go binary, it will bypass the proxy. Configure the application to use SOCKS5 proxy `10.200.200.1:9050` directly, or run it inside `fella shell` and verify with `fella verify`.
+
 ## Security Model
 
 1. **Assume the host network is hostile** — all application traffic is forced through the backend namespace.

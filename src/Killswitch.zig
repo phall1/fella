@@ -53,7 +53,25 @@ fn buildBasicRuleset(out: []u8) ![]const u8 {
     , .{VETH_HOST});
 }
 
-fn buildStrictRuleset(out: []u8) ![]const u8 {
+const TOR_USERS = [_][]const u8{ "debian-tor", "tor", "_tor" };
+
+fn detectTorUser() ?[]const u8 {
+    var buf: [4096]u8 = undefined;
+    const fd = std.posix.openatZ(-100, "/etc/passwd", .{ .ACCMODE = .RDONLY }, 0) catch return null;
+    defer _ = std.os.linux.close(fd);
+    const n = std.posix.read(fd, &buf) catch return null;
+    const content = buf[0..n];
+    for (TOR_USERS) |user| {
+        var search_buf: [64]u8 = undefined;
+        const prefix = std.fmt.bufPrint(&search_buf, "{s}:", .{user}) catch continue;
+        if (std.mem.indexOf(u8, content, prefix) != null) {
+            return user;
+        }
+    }
+    return null;
+}
+
+fn buildStrictRuleset(out: []u8, tor_user: []const u8) ![]const u8 {
     return try std.fmt.bufPrint(out,
         \\*filter
         \\:INPUT DROP [0:0]
@@ -64,14 +82,14 @@ fn buildStrictRuleset(out: []u8) ![]const u8 {
         \\-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         \\-A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
         \\-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
-        \\-A OUTPUT -m owner --uid-owner debian-tor -j ACCEPT
+        \\-A OUTPUT -m owner --uid-owner {s} -j ACCEPT
         \\-A OUTPUT -p tcp -d 127.0.0.1 --dport 9050 -j ACCEPT
         \\-A OUTPUT -p tcp -d 127.0.0.1 --dport 9051 -j ACCEPT
         \\-A OUTPUT -p udp -d 127.0.0.1 --dport 5353 -j ACCEPT
         \\-A INPUT -i {s} -j ACCEPT
         \\COMMIT
         \\
-    , .{VETH_HOST});
+    , .{ tor_user, VETH_HOST });
 }
 
 pub fn enableBasic(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
@@ -101,8 +119,9 @@ pub fn enableBasic(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
 pub fn enableStrict(self: *@This(), io: std.Io, alloc: std.mem.Allocator) !void {
     try self.save(io, alloc);
 
+    const tor_user = detectTorUser() orelse "debian-tor";
     var ruleset_buf: [1024]u8 = undefined;
-    const ruleset = try buildStrictRuleset(&ruleset_buf);
+    const ruleset = try buildStrictRuleset(&ruleset_buf, tor_user);
     try applyRuleset(alloc, "iptables-restore", ruleset);
 
     const ip6ruleset =
@@ -200,12 +219,18 @@ test "buildBasicRuleset contains expected patterns" {
 
 test "buildStrictRuleset contains expected patterns" {
     var buf: [1024]u8 = undefined;
-    const rs = try buildStrictRuleset(&buf);
+    const rs = try buildStrictRuleset(&buf, "debian-tor");
     try std.testing.expect(std.mem.indexOf(u8, rs, "COMMIT") != null);
     try std.testing.expect(std.mem.indexOf(u8, rs, ":OUTPUT DROP") != null);
     try std.testing.expect(std.mem.indexOf(u8, rs, "debian-tor") != null);
     try std.testing.expect(std.mem.indexOf(u8, rs, "9050") != null);
     try std.testing.expect(std.mem.indexOf(u8, rs, "5353") != null);
+}
+
+test "detectTorUser finds a user if present in passwd" {
+    // This test is environment-dependent; on most systems with tor installed
+    // one of the TOR_USERS will exist. We just verify it doesn't crash.
+    _ = detectTorUser();
 }
 
 test "Mode enum values" {
