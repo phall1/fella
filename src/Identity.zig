@@ -85,7 +85,7 @@ fn getCurrentTimezone(alloc: std.mem.Allocator) ![]u8 {
     return try alloc.dupe(u8, path);
 }
 
-fn getCurrentLocale(alloc: std.mem.Allocator) ![]u8 {
+pub fn getCurrentLocale(alloc: std.mem.Allocator) ![]u8 {
     var buf: [256]u8 = undefined;
     const n = readFileZ("/etc/default/locale", &buf) catch return try alloc.dupe(u8, "C.UTF-8");
     const content = std.mem.trim(u8, buf[0..n], " \n\r\t");

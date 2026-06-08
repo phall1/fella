@@ -4,7 +4,15 @@ const Output = @import("Output.zig");
 const CHECK_IP_URL = "https://check.torproject.org/api/ip";
 const EXPOSE_IP_URL = "https://icanhazip.com";
 
-const TorCheck = struct { is_tor: bool, ip: []const u8 };
+pub const TorCheck = struct { is_tor: bool, ip: []const u8 };
+
+pub fn quickTorCheck(alloc: std.mem.Allocator) !bool {
+    const body = try fetchUrl(alloc, CHECK_IP_URL, true);
+    defer alloc.free(body);
+    const result = try parseTorCheck(body, alloc);
+    defer alloc.free(result.ip);
+    return result.is_tor;
+}
 
 pub const Result = struct {
     name: []const u8,
@@ -94,7 +102,7 @@ test "parseTorCheck handles missing IP" {
     try std.testing.expectEqualStrings("unknown", result.ip);
 }
 
-fn checkTor(io: std.Io, alloc: std.mem.Allocator) !TorCheck {
+pub fn checkTor(io: std.Io, alloc: std.mem.Allocator) !TorCheck {
     _ = io;
     const body = try fetchUrl(alloc, CHECK_IP_URL, true);
     defer alloc.free(body);

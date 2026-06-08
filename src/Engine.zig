@@ -17,6 +17,7 @@ const Masquerade = @import("Masquerade.zig");
 const Mac = @import("Mac.zig");
 const Ephemeral = @import("Ephemeral.zig");
 const Signal = @import("Signal.zig");
+const Browser = @import("Browser.zig");
 
 const BACKEND_FILE = "/var/lib/fella/backend_kind";
 
@@ -202,6 +203,18 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover:
 
     try self.ks.enableBasic(io, alloc_v);
 
+    // Fail-closed: verify Tor is actually working before declaring success
+    if (isTorBackend(self.backend.name())) {
+        try Output.stdoutPrint(io, alloc_v, "    [*] Verifying backend connectivity...\n", .{});
+        const tor_ok = Verify.quickTorCheck(alloc_v) catch false;
+        if (!tor_ok) {
+            try Output.stdoutPrint(io, alloc_v, "    {s}[!] Tor verification failed — traffic would leak. Stopping.{s}\n", .{ Output.Color.red, Output.Color.reset });
+            try self.stop(io, alloc_v);
+            return error.BackendVerifyFailed;
+        }
+        try Output.stdoutPrint(io, alloc_v, "    [+] Backend verified\n", .{});
+    }
+
     if (with_cover) {
         Subagent.start(io, alloc_v, .cover) catch |err| {
             try Output.stdoutPrint(io, alloc_v, "    [!] Cover subagent failed: {any}\n", .{err});
@@ -263,6 +276,18 @@ pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cov
 
     try self.ks.enableStrict(io, alloc_v);
 
+    // Fail-closed: verify Tor is actually working before declaring success
+    if (isTorBackend(self.backend.name())) {
+        try Output.stdoutPrint(io, alloc_v, "    [*] Verifying backend connectivity...\n", .{});
+        const tor_ok = Verify.quickTorCheck(alloc_v) catch false;
+        if (!tor_ok) {
+            try Output.stdoutPrint(io, alloc_v, "    {s}[!] Tor verification failed — traffic would leak. Stopping.{s}\n", .{ Output.Color.red, Output.Color.reset });
+            try self.stop(io, alloc_v);
+            return error.BackendVerifyFailed;
+        }
+        try Output.stdoutPrint(io, alloc_v, "    [+] Backend verified\n", .{});
+    }
+
     if (with_cover) {
         Subagent.start(io, alloc_v, .cover) catch |err| {
             try Output.stdoutPrint(io, alloc_v, "    [!] Cover subagent failed: {any}\n", .{err});
@@ -275,6 +300,10 @@ pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cov
     try self.transition(.lockdown);
     try Output.stdoutPrint(io, alloc_v, "{s}[+] LOCKDOWN ACTIVE{s}\n", .{ Output.Color.green, Output.Color.reset });
     try Output.stdoutPrint(io, alloc_v, "    [*] Host outbound blocked. Use 'fella shell' for routed access.\n", .{});
+}
+
+fn isTorBackend(name: []const u8) bool {
+    return std.mem.eql(u8, name, "tor") or std.mem.eql(u8, name, "chain");
 }
 
 pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
@@ -542,4 +571,11 @@ pub fn macRotateStart(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !v
 pub fn macRotateStop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     _ = self;
     try Subagent.stop(io, alloc_v, .macrotate);
+}
+
+pub fn browser(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
+    _ = self;
+    const locale = Identity.getCurrentLocale(alloc_v) catch "en-US";
+    defer alloc_v.free(locale);
+    try Browser.launch(io, alloc_v, locale);
 }

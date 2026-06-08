@@ -47,12 +47,38 @@ pub fn restoreHost(io: std.Io, alloc: std.mem.Allocator, iface: []const u8) !voi
     try Output.stdoutPrint(io, alloc, "    [+] MAC restored on {s}: {s}\n", .{ iface, fmtMac(saved) });
 }
 
+// Common vendor OUIs — using a real prefix makes the MAC look legitimate
+// instead of randomly generated. The last 3 bytes are randomized.
+const VENDOR_OUIS = [_][3]u8{
+    .{ 0x00, 0x1B, 0x21 }, // Intel
+    .{ 0x00, 0x13, 0x02 }, // Intel
+    .{ 0x00, 0xE0, 0x4C }, // Realtek
+    .{ 0x52, 0x54, 0x00 }, // Realtek (QEMU common)
+    .{ 0x00, 0x10, 0x18 }, // Broadcom
+    .{ 0x00, 0x26, 0x86 }, // Qualcomm
+    .{ 0x00, 0x17, 0xF2 }, // Apple
+    .{ 0x00, 0x14, 0x22 }, // Dell
+    .{ 0x00, 0x17, 0xA4 }, // HP
+    .{ 0x00, 0x1F, 0xCC }, // Samsung
+};
+
 fn randomMac() [6]u8 {
     var buf: [6]u8 = undefined;
     _ = std.os.linux.getrandom(&buf, buf.len, 0);
-    // Locally administered + unicast
-    buf[0] = (buf[0] | 0x02) & 0xfe;
-    return buf;
+
+    // Pick a random vendor OUI
+    const oui_idx = buf[0] % VENDOR_OUIS.len;
+    const oui = VENDOR_OUIS[oui_idx];
+
+    var mac: [6]u8 = undefined;
+    mac[0] = oui[0];
+    mac[1] = oui[1];
+    mac[2] = oui[2];
+    // Last 3 bytes are fully random
+    mac[3] = buf[3];
+    mac[4] = buf[4];
+    mac[5] = buf[5];
+    return mac;
 }
 
 pub fn fmtMac(mac: [6]u8) [17:0]u8 {
@@ -136,10 +162,17 @@ test "parseMac round-trip" {
     try std.testing.expectEqual(mac, parsed);
 }
 
-test "randomMac is locally administered and unicast" {
+test "randomMac uses a known vendor OUI" {
     const mac = randomMac();
-    try std.testing.expect(mac[0] & 0x02 != 0); // locally administered
     try std.testing.expect(mac[0] & 0x01 == 0); // unicast
+    var found = false;
+    for (VENDOR_OUIS) |oui| {
+        if (mac[0] == oui[0] and mac[1] == oui[1] and mac[2] == oui[2]) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
 }
 
 fn setHwaddr(iface: []const u8, mac: [6]u8) !void {

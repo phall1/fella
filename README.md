@@ -159,6 +159,7 @@ fella cover start           Start padding subagent
 fella cover stop            Stop padding subagent
 fella macrotate start       Start periodic MAC rotation subagent
 fella macrotate stop        Stop MAC rotation subagent
+fella browser               Launch ephemeral Firefox in netns
 fella stop                  Deactivate everything, restore system
 fella rotate                New identity + rotate MACs + rotate backend circuit
 fella status                Show current posture
@@ -266,6 +267,24 @@ sudo ./zig-out/bin/fella start --cover
 # or manually
 sudo ./zig-out/bin/fella cover start
 sudo ./zig-out/bin/fella cover stop
+```
+
+### Browser Fingerprint Isolation
+
+The browser is the #1 identity leak vector. `fella browser` launches an ephemeral Firefox profile inside the fella netns with:
+
+- `privacy.resistFingerprinting` enabled
+- WebRTC disabled (prevents local IP leaks)
+- WebGL disabled
+- Canvas capture disabled
+- Disk cache, session restore, and history disabled
+- SOCKS5 proxy configured directly to Tor (no torsocks LD_PRELOAD)
+- Telemetry, SafeBrowsing, and Pocket disabled
+- Profile wiped from `/tmp` when Firefox exits
+
+```bash
+sudo fella start
+sudo fella browser
 ```
 
 ### Censorship-Resistant Bridges

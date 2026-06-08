@@ -58,6 +58,7 @@ fn printHelp(io: std.Io) !void {
         \\  cover stop            Stop cover traffic daemon
         \\  macrotate start       Start periodic MAC rotation subagent
         \\  macrotate stop        Stop MAC rotation subagent
+        \\  browser               Launch ephemeral Firefox in netns
         \\  doctor                Diagnose environment and installation
         \\  test                  Run built-in integration test suite
         \\  help                  Show this message
@@ -218,6 +219,8 @@ pub fn main(init: std.process.Init) !void {
             try Output.stderrWrite(io, "Usage: fella macrotate start|stop\n");
             std.process.exit(1);
         }
+    } else if (std.mem.eql(u8, cmd, "browser")) {
+        try engine.?.browser(io, alloc);
     } else if (std.mem.eql(u8, cmd, "doctor")) {
         if (!json_mode) try printBanner(io, alloc);
         if (json_mode) {
@@ -307,7 +310,7 @@ fn runTestJson(io: std.Io, alloc: std.mem.Allocator) !void {
 }
 
 fn needsEnv(cmd: []const u8) bool {
-    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "macrotate", "doctor", "test" };
+    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "macrotate", "browser", "doctor", "test" };
     inline for (env_cmds) |c| {
         if (std.mem.eql(u8, cmd, c)) return true;
     }

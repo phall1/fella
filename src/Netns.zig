@@ -12,7 +12,14 @@ const TORSOCKS_CONF =
     \\TorAddress {s}
     \\TorPort 9050
     \\
-;
+    ;
+
+const RESOLV_CONF =
+    \\# fella — all DNS forced through Tor DNSPort
+    \\nameserver {s}
+    \\options timeout:5 attempts:2 rotate
+    \\
+    ;
 
 pub fn create(io: std.Io, alloc: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc, "[+] Creating network namespace...\n", .{});
@@ -67,6 +74,16 @@ pub fn create(io: std.Io, alloc: std.mem.Allocator) !void {
     const torsocks_conf = std.fmt.bufPrint(&torsocks_buf, TORSOCKS_CONF, .{HOST_IP}) catch TORSOCKS_CONF;
     try writeFileZ("/var/lib/fella/torsocks.conf", torsocks_conf);
 
+    // Write netns resolv.conf for DNS enforcement
+    var resolv_buf: [256]u8 = undefined;
+    const resolv_conf = std.fmt.bufPrint(&resolv_buf, RESOLV_CONF, .{HOST_IP}) catch "nameserver 10.200.200.1\n";
+    try writeFileZ("/var/lib/fella/resolv.conf", resolv_conf);
+
+    // Disable IPv6 inside netns to prevent AAAA leaks
+    disableIPv6InNs(alloc) catch |err| {
+        try Output.stdoutPrint(io, alloc, "    [!] Could not disable IPv6 in netns: {any}\n", .{err});
+    };
+
     try Output.stdoutPrint(io, alloc, "    [+] Namespace {s} ready ({s} ↔ {s})\n", .{ NS_NAME, HOST_IP, NS_IP });
 }
 
@@ -106,13 +123,34 @@ pub fn execNs(io: std.Io, alloc: std.mem.Allocator, argv: []const []const u8) !v
     var full_argv: std.ArrayList([]const u8) = .empty;
     defer full_argv.deinit(alloc);
 
-    try full_argv.appendSlice(alloc, &.{
-        "ip", "netns", "exec", NS_NAME,
-        "/usr/bin/env", "TORSOCKS_CONF_FILE=/var/lib/fella/torsocks.conf",
-        "/usr/bin/torsocks",
-    });
-    for (argv) |arg| {
-        try full_argv.append(alloc, arg);
+    const has_unshare = hasBinary("unshare");
+    if (has_unshare) {
+        // Enter netns + private mount namespace, bind-mount resolv.conf, then torsocks
+        try full_argv.appendSlice(alloc, &.{
+            "ip", "netns", "exec", NS_NAME,
+            "unshare", "-m",
+            "sh", "-c",
+        });
+        var cmd_inner: std.ArrayList(u8) = .empty;
+        defer cmd_inner.deinit(alloc);
+        try cmd_inner.appendSlice(alloc, "mount --bind /var/lib/fella/resolv.conf /etc/resolv.conf && export TORSOCKS_CONF_FILE=/var/lib/fella/torsocks.conf && exec /usr/bin/torsocks ");
+        for (argv) |arg| {
+            try cmd_inner.append(alloc, '\'');
+            try cmd_inner.appendSlice(alloc, arg);
+            try cmd_inner.appendSlice(alloc, "'\''");
+            try cmd_inner.append(alloc, ' ');
+        }
+        try full_argv.append(alloc, cmd_inner.items);
+    } else {
+        try Output.stdoutPrint(io, alloc, "    [!] 'unshare' not found — DNS may leak\n", .{});
+        try full_argv.appendSlice(alloc, &.{
+            "ip", "netns", "exec", NS_NAME,
+            "/usr/bin/env", "TORSOCKS_CONF_FILE=/var/lib/fella/torsocks.conf",
+            "/usr/bin/torsocks",
+        });
+        for (argv) |arg| {
+            try full_argv.append(alloc, arg);
+        }
     }
 
     try runCmdArgv(full_argv.items);
@@ -135,11 +173,15 @@ pub fn shell(io: std.Io, alloc: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc, "{s}[+] Dropping into fella shell (Tor-routed namespace){s}\n", .{ Output.Color.blue, Output.Color.reset });
     try Output.stdoutPrint(io, alloc, "    Type 'exit' to return\n", .{});
 
-    const script =
-        \\#!/bin/sh
-        \\export TORSOCKS_CONF_FILE="/var/lib/fella/torsocks.conf"
-        \\exec /usr/bin/torsocks "${SHELL:-/bin/bash}" -i
-    ;
+    const has_unshare = hasBinary("unshare");
+    if (!has_unshare) {
+        try Output.stdoutPrint(io, alloc, "    [!] 'unshare' not found — DNS may leak in shell\n", .{});
+    }
+
+    const script = if (has_unshare)
+        "#!/bin/sh\nexport TORSOCKS_CONF_FILE=\"/var/lib/fella/torsocks.conf\"\nexec unshare -m sh -c 'mount --bind /var/lib/fella/resolv.conf /etc/resolv.conf && exec /usr/bin/torsocks \"${SHELL:-/bin/bash}\" -i'\n"
+    else
+        "#!/bin/sh\nexport TORSOCKS_CONF_FILE=\"/var/lib/fella/torsocks.conf\"\nexec /usr/bin/torsocks \"${SHELL:-/bin/bash}\" -i\n";
 
     const cmd = "/tmp/fella_shell.sh";
     _ = std.os.linux.unlink(cmd);
@@ -206,6 +248,24 @@ fn runIptablesNs(alloc: std.mem.Allocator, args: []const []const u8) !void {
     try full.appendSlice(alloc, &.{ "ip", "netns", "exec", NS_NAME, "iptables" });
     for (args) |a| try full.append(alloc, a);
     try runCmdArgv(full.items);
+}
+
+fn disableIPv6InNs(alloc: std.mem.Allocator) !void {
+    var full: std.ArrayList([]const u8) = .empty;
+    defer full.deinit(alloc);
+    try full.appendSlice(alloc, &.{ "ip", "netns", "exec", NS_NAME, "sysctl", "-w", "net.ipv6.conf.all.disable_ipv6=1" });
+    try runCmdArgv(full.items);
+}
+
+fn hasBinary(name: []const u8) bool {
+    const prefixes = [_][]const u8{ "/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/" };
+    var buf: [128:0]u8 = undefined;
+    for (prefixes) |prefix| {
+        const path = std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, name }) catch continue;
+        buf[path.len] = 0;
+        if (std.os.linux.access(&buf, 0) == 0) return true;
+    }
+    return false;
 }
 
 fn resolveCmd(name: []const u8, arena_alloc: std.mem.Allocator) ?[*:0]const u8 {
