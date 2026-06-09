@@ -59,20 +59,26 @@ A module is **done** when:
 
 ## 3. Current Status
 
-See `docs/tracking/status.md` for live module status.
+See `docs/tracking/status.md` for live module status. Most modules are now complete through Gate 4+.
 
 | Module | Spec | Impl | Unit | Integ | E2E | Status |
 |--------|------|------|------|-------|-----|--------|
-| Core/Engine | 📝 | ✅ | ⬜ | ⬜ | ⬜ | In Progress |
-| Platform Probe | 📝 | ✅ | ⬜ | ⬜ | ⬜ | In Progress |
-| Identity Rotation | 📝 | ⬜ | ⬜ | ⬜ | ⬜ | Planned |
-| Tor Backend | 📝 | ⬜ | ⬜ | ⬜ | ⬜ | Planned |
-| Killswitch | 📝 | ⬜ | ⬜ | ⬜ | ⬜ | Planned |
-| Container Hardening | 📝 | ⬜ | ⬜ | ⬜ | ⬜ | Planned |
-| Verification | 📝 | ⬜ | ⬜ | ⬜ | ⬜ | Planned |
-| Install/Build | 📝 | ⬜ | ⬜ | ⬜ | ⬜ | Planned |
+| Core/Engine | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Platform Probe | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Identity Rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Tor Backend | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| WireGuard Backend | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| Chain Backend | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
+| Killswitch | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Netns Isolation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Browser Isolation | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
+| Traffic Shaping | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 🚧 |
+| DPI Obfuscation | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 🚧 |
+| Anti-Forensic Wipe | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Encrypted State | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Secure Memory | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-Legend: 📝 Spec written, ✅ Implemented, ⬜ Not started
+Legend: ✅ Complete, 🚧 In Progress, ⬜ Not started
 
 ---
 
@@ -153,6 +159,33 @@ sudo ./scripts/validate.sh     # Unit + Integration + E2E
 ./scripts/validate.sh --ci
 ```
 
+### VM-based Testing (Recommended for destructive tests)
+
+fella modifies hostname, machine-id, MAC addresses, netns, and iptables. **Do not run integration tests on your daily driver.** Use the VM test harness instead:
+
+```bash
+# One-time setup: create a QEMU VM with Ubuntu, tor, wireguard, firefox
+./scripts/vm-test.sh launch
+
+# Snapshot before testing
+./scripts/vm-test.sh snapshot
+
+# Build fella in the VM and run the full integration suite
+./scripts/vm-test.sh test
+
+# SSH into the VM for manual exploration
+./scripts/vm-test.sh ssh
+
+# Restore snapshot after testing
+./scripts/vm-test.sh restore
+
+# Tear down when done
+./scripts/vm-test.sh destroy
+```
+
+**Requirements:** `qemu-system-x86_64`, `qemu-img`, `ssh`, `curl`.
+**What it does:** Downloads Ubuntu cloud image, boots a VM with cloud-init, installs deps (tor, wireguard-tools, iptables, firefox), rsyncs the source, builds, and runs tests inside the isolated VM.
+
 ---
 
 ## 6. Acceptance Criteria Template
@@ -172,9 +205,11 @@ Every module spec must answer:
 ## 7. Versioning & Releases
 
 - `0.1.0` — MVP: init/start/stop/rotate with Tor + basic killswitch (Linux)
-- `0.2.0` — WireGuard backend, backend chaining
-- `0.3.0` — Persona system with persistence
-- `0.4.0` — macOS support, container hardening
+- `0.2.0` — Netns isolation, torsocks transparent proxy
+- `0.3.0` — Encrypted state, secure memory, anti-forensic wipe
+- `0.4.0` — Backend plugin architecture (Tor, WireGuard, Chain), seccomp-bpf
+- `0.5.0` — WireGuard-first, kernel traffic shaping, DPI obfuscation, browser isolation, focused 3-layer architecture
+- `0.6.0` — Persona system with persistence
 - `1.0.0` — Full feature set, stable API
 
 Release checklist in `docs/tracking/release-checklist.md`.
