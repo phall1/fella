@@ -18,6 +18,8 @@ const Mac = @import("Mac.zig");
 const Ephemeral = @import("Ephemeral.zig");
 const Signal = @import("Signal.zig");
 const Browser = @import("Browser.zig");
+const Shape = @import("Shape.zig");
+const Stego = @import("Stego.zig");
 
 const BACKEND_FILE = "/var/lib/fella/backend_kind";
 
@@ -42,15 +44,27 @@ pub fn create(alloc_v: std.mem.Allocator, env: platform.Environment) !@This() {
     };
 }
 
+fn hasWgConfig() bool {
+    var path_z: [512:0]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_z, "/var/lib/fella/wireguard.conf", .{}) catch return false;
+    const fd = std.posix.openatZ(-100, path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
+    _ = std.os.linux.close(fd);
+    return true;
+}
+
 fn loadBackendKind() Backend.Kind {
-    const fd = std.posix.openatZ(-100, BACKEND_FILE, .{ .ACCMODE = .RDONLY }, 0) catch return .tor;
+    const fd = std.posix.openatZ(-100, BACKEND_FILE, .{ .ACCMODE = .RDONLY }, 0) catch {
+        // WireGuard-first: if a config exists and no backend was explicitly set,
+        // prefer WireGuard over Tor. Tor is the legacy fallback.
+        return if (hasWgConfig()) .wireguard else .tor;
+    };
     defer _ = std.os.linux.close(fd);
     var buf: [64]u8 = undefined;
-    const n = std.posix.read(fd, &buf) catch return .tor;
+    const n = std.posix.read(fd, &buf) catch return if (hasWgConfig()) .wireguard else .tor;
     const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (std.mem.eql(u8, trimmed, "wireguard")) return .wireguard;
     if (std.mem.eql(u8, trimmed, "chain")) return .chain;
-    return .tor;
+    return if (hasWgConfig()) .wireguard else .tor;
 }
 
 fn saveBackendKind(kind: Backend.Kind) !void {
@@ -201,6 +215,17 @@ pub fn start(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cover:
         return error.Interrupted;
     }
 
+    // Apply traffic shaping and obfuscation for WireGuard-based backends
+    if (isWgBackend(self.backend.name())) {
+        Shape.apply(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Traffic shaping failed: {any}\n", .{err});
+        };
+        // Stego is best-effort; it will warn if udp2raw is not available
+        _ = Stego.apply(io, alloc_v, "0.0.0.0:51820") catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Obfuscation failed: {any}\n", .{err});
+        };
+    }
+
     try self.ks.enableBasic(io, alloc_v);
 
     // Fail-closed: verify Tor is actually working before declaring success
@@ -274,6 +299,16 @@ pub fn lockdown(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator, with_cov
         return error.Interrupted;
     }
 
+    // Apply traffic shaping and obfuscation for WireGuard-based backends
+    if (isWgBackend(self.backend.name())) {
+        Shape.apply(io, alloc_v) catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Traffic shaping failed: {any}\n", .{err});
+        };
+        _ = Stego.apply(io, alloc_v, "0.0.0.0:51820") catch |err| {
+            try Output.stdoutPrint(io, alloc_v, "    [!] Obfuscation failed: {any}\n", .{err});
+        };
+    }
+
     try self.ks.enableStrict(io, alloc_v);
 
     // Fail-closed: verify Tor is actually working before declaring success
@@ -306,6 +341,10 @@ fn isTorBackend(name: []const u8) bool {
     return std.mem.eql(u8, name, "tor") or std.mem.eql(u8, name, "chain");
 }
 
+fn isWgBackend(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wireguard") or std.mem.eql(u8, name, "chain");
+}
+
 pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     try Output.stdoutPrint(io, alloc_v, "[+] Restoring identity...\n", .{});
     Identity.restore(alloc_v) catch |err| {
@@ -313,6 +352,13 @@ pub fn stop(self: *@This(), io: std.Io, alloc_v: std.mem.Allocator) !void {
     };
 
     Subagent.stopAll(io, alloc_v);
+
+    // Tear down shaping and obfuscation before the backend
+    if (isWgBackend(self.backend.name())) {
+        Shape.remove(io, alloc_v) catch {};
+        Stego.remove(io, alloc_v);
+    }
+
     try self.backend.stop(io, alloc_v);
     try self.ks.disable(io, alloc_v);
     Harden.revert(io, alloc_v) catch |err| {

@@ -7,7 +7,7 @@
 
 > **A network identity and traffic containment framework for hostile networks.**
 >
-> **Layer 1 — Containment:** All traffic is forced through Tor inside an isolated netns. Fail-closed.
+> **Layer 1 — Containment:** All traffic is forced through the tunnel inside an isolated netns. Fail-closed.
 > **Layer 2 — Identity:** Every session the machine looks like a different person.
 > **Layer 3 — Forensics:** After `stop`, an examiner finds nothing.
 >
@@ -20,18 +20,18 @@
 /_/ /_/___/_//_/\__/_//_/
 ```
 
-**fella** rotates your system's identity artifacts, isolates traffic inside a dedicated network namespace, and routes it through privacy-preserving backends (Tor, WireGuard) with a fail-closed killswitch. It was built to survive hostile network environments, container fingerprinting, and forensic analysis.
+**fella** is a traffic containment and identity rotation framework for hostile networks. It isolates all traffic inside a dedicated network namespace, rotates your system's identity artifacts per session, and routes through modern encrypted tunnels (WireGuard) with kernel-level traffic shaping and DPI obfuscation. Tor is supported as a legacy zero-infrastructure fallback.
 
 ## Why fella?
 
 Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 
 - **Compiled language** (Zig 0.16) — testable, auditable, cross-compiles to bare metal
-- **Real containment** — dedicated `fella` netns with veth pair, not just `proxychains`
-- **Fail-closed by design** — if the backend drops, your traffic drops, not leaks
+- **Real containment** — dedicated `fella` netns with veth pair. Fail-closed iptables. DNS bind-mount. IPv6 disabled.
+- **Modern tunnels** — WireGuard-first with kernel `tc` traffic shaping and udp2raw DPI obfuscation
+- **Fail-closed by design** — auto-verifies tunnel health. If the backend drops, traffic stops, not leaks.
 - **Forensic resistance** — encrypted state, secure memory (`mlock` + `MADV_DONTDUMP`), 3-pass anti-forensic wipe
-- **Runtime self-protection** — seccomp-bpf sandbox blocks `ptrace`, `userfaultfd`, kernel module loading, and other high-leverage attack primitives
-- **Backend plugin architecture** — Tor, WireGuard, or chained VPN→Tor
+- **Identity isolation** — Vendor-OUI MAC rotation, hostname/machine-id/timezone/locale rotation, ephemeral browser profiles
 
 ## What It Does
 
@@ -39,18 +39,20 @@ fella is organized around three layers. Every feature serves exactly one.
 
 ### Layer 1 — Containment (The Pipe)
 
-If it leaves the NIC, it goes through Tor. Fail-closed.
+If it leaves the NIC, it goes through the tunnel. Fail-closed.
 
 | Feature | How |
 |---------|-----|
 | **Netns isolation** | Dedicated `fella` network namespace with veth pair. Apps cannot bypass the proxy. |
-| **Fail-closed firewall** | Netns `OUTPUT DROP` by default. Only Tor SOCKS (9050) and DNSPort (5353) allowed. |
-| **DNS enforcement** | Custom `resolv.conf` bind-mounted inside `fella exec` / `fella shell`. All queries via Tor. |
+| **Fail-closed firewall** | Netns `OUTPUT DROP` by default. Only tunnel traffic allowed. |
+| **DNS enforcement** | Custom `resolv.conf` bind-mounted inside `fella exec` / `fella shell`. All queries via tunnel DNS. |
 | **IPv6 disable** | `net.ipv6.conf.all.disable_ipv6=1` inside netns. No AAAA leaks. |
-| **Auto-verify** | After `start`, fella confirms `IsTor=true` at `check.torproject.org`. If false, it aborts and stops. |
-| **Killswitch** | Host iptables restored atomically. Strict mode drops all non-Tor outbound. |
-| **Backend plugins** | Tor (default), WireGuard, or chained VPN→Tor. |
-| **Censorship bridges** | Auto-injects obfs4 / snowflake bridge lines if pluggable transports are installed. |
+| **Auto-verify** | After `start`, fella confirms tunnel health. If false, it aborts and stops. |
+| **Killswitch** | Host iptables restored atomically. Strict mode drops all non-tunnel outbound. |
+| **Backend plugins** | WireGuard (default if config present), Tor (legacy fallback), or chained VPN→Tor. |
+| **Traffic shaping** | Kernel `tc` enforces constant-rate cells on WireGuard traffic. |
+| **DPI obfuscation** | Auto-detects `udp2raw` to tunnel WireGuard UDP through fake TCP. |
+| **Censorship bridges** | Auto-injects obfs4 / snowflake bridge lines for Tor if pluggable transports are installed. |
 
 ### Layer 2 — Identity (The Mask)
 
@@ -90,15 +92,15 @@ git clone https://github.com/phall1/fella.git
 cd fella
 zig build
 
-# Initialize (pick your backend)
+# Initialize (WireGuard is default if wireguard.conf exists)
 sudo ./zig-out/bin/fella init
 sudo ./zig-out/bin/fella init --backend wireguard   # requires /var/lib/fella/wireguard.conf
 sudo ./zig-out/bin/fella init --backend chain       # VPN -> Tor, requires wireguard.conf
+sudo ./zig-out/bin/fella init --backend tor         # legacy zero-infrastructure fallback
 
 # Activate
 sudo ./zig-out/bin/fella start                      # identity + backend + netns + killswitch + seccomp
-sudo ./zig-out/bin/fella start --cover              # ...plus traffic padding noise
-sudo ./zig-out/bin/fella start --ephemeral          # ...with RAM-only session state
+sudo ./zig-out/bin/fella start --ephemeral          # RAM-only session state
 
 # Use
 sudo ./zig-out/bin/fella shell          # drop into routed subshell
@@ -249,14 +251,9 @@ var b = Backend.create(Kind.tor);
 try b.start(io, alloc);
 ```
 
-### Tor Backend (default)
+### WireGuard Backend (default if config exists)
 
-- Fork/exec `tor` with generated `torrc`
-- SOCKS5 on `127.0.0.1:9050` + `10.200.200.1:9050`
-- DNS on `127.0.0.1:5353` + `10.200.200.1:5353`
-- ControlPort on `127.0.0.1:9051` for circuit rotation
-
-### WireGuard Backend
+The modern, recommended backend. WireGuard uses the Noise protocol framework, is fast, and has a small attack surface. fella adds kernel `tc` traffic shaping and optional `udp2raw` DPI obfuscation.
 
 Requires `/var/lib/fella/wireguard.conf`:
 
@@ -278,6 +275,28 @@ Activate with:
 
 ```bash
 sudo ./zig-out/bin/fella init --backend wireguard
+sudo ./zig-out/bin/fella start
+```
+
+**DPI resistance:** Install `udp2raw` on both client and server to tunnel WireGuard UDP through fake TCP:
+```bash
+# https://github.com/wangyu-/udp2raw
+sudo ./zig-out/bin/fella start  # fella auto-detects and starts udp2raw
+```
+
+**Traffic shaping:** fella applies `tc tbf` to the WireGuard interface to enforce constant-rate cells, defeating timing analysis.
+
+### Tor Backend (legacy fallback)
+
+Zero-infrastructure fallback — no server needed, but traffic is fingerprintable at the network level and exit nodes are actively monitored.
+
+- Fork/exec `tor` with generated `torrc`
+- SOCKS5 on `127.0.0.1:9050` + `10.200.200.1:9050`
+- DNS on `127.0.0.1:5353` + `10.200.200.1:5353`
+- ControlPort on `127.0.0.1:9051` for circuit rotation
+
+```bash
+sudo ./zig-out/bin/fella init --backend tor
 sudo ./zig-out/bin/fella start
 ```
 
