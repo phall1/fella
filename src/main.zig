@@ -100,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (res.args.version != 0) {
-        try Output.stdoutPrint(io, alloc, "fella 0.4.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.5.0\n", .{});
         return;
     }
 
@@ -237,7 +237,7 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, cmd, "help")) {
         try printHelp(io);
     } else if (std.mem.eql(u8, cmd, "version")) {
-        try Output.stdoutPrint(io, alloc, "fella 0.4.0\n", .{});
+        try Output.stdoutPrint(io, alloc, "fella 0.5.0\n", .{});
     } else {
         try Output.stderrWrite(io, "Unknown command: ");
         try Output.stderrWrite(io, cmd);

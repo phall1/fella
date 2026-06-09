@@ -2,10 +2,15 @@
 
 [![Zig](https://img.shields.io/badge/Zig-0.16.0-orange.svg)](https://ziglang.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20x86__64%20%7C%20aarch64-blue.svg)](https://kernel.org/)
-[![Tests](https://img.shields.io/badge/tests-6%2F6%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#testing)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-> **A network identity and traffic containment framework for hostile networks.**  
+> **A network identity and traffic containment framework for hostile networks.**
+>
+> **Layer 1 — Containment:** All traffic is forced through Tor inside an isolated netns. Fail-closed.
+> **Layer 2 — Identity:** Every session the machine looks like a different person.
+> **Layer 3 — Forensics:** After `stop`, an examiner finds nothing.
+>
 > Written in Zig. Zero shell dependency. Real integration tests.
 
 ```
@@ -30,22 +35,52 @@ Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
 
 ## What It Does
 
-| Layer | Feature |
-|-------|---------|
-| 🎭 **Identity** | Rotates hostname, machine-id, timezone, locale, MAC addresses, bash history per session |
-| 🔒 **Containment** | Dedicated `fella` network namespace with veth pair to host |
-| 🌐 **Routing** | Tor (SOCKS5 + DNS + ControlPort), WireGuard, or chained backends |
-| ⛔ **Killswitch** | `iptables-restore` / `ip6tables-restore` atomic ruleset; basic or strict mode |
-| 🛡️ **Sandbox** | seccomp-bpf deny-list blocks 15+ dangerous syscalls |
-| 🧬 **Hardening** | Container fingerprint spoofing via `/proc` bind-mounts + LD_PRELOAD `libfella.so` |
-| 🧹 **Wipe** | 3-pass overwrite (random → complement → random) + `fsync` for session artifacts |
-| 🔗 **Chain** | VPN → Tor chaining (`--backend chain`) for nested tunneling |
-| 🎲 **Padding** | Traffic padding subagent emits fixed-size noise through the tunnel to frustrate timing analysis |
-| 🌉 **Bridges** | Auto-detects obfs4 / snowflake transports for censored networks |
-| 🎭 **Masquerade** | Renames fella to common systemd process names in `ps` / `top` (casual obfuscation) |
-| 💾 **Ephemeral** | `--ephemeral` mounts `/var/lib/fella` as tmpfs; evidence evaporates on power loss |
-| 🔐 **Crypto** | XChaCha20-Poly1305 encrypted state via `init --encrypt` |
-| ✅ **Verify** | Tor confirmation, IP exposure, direct bypass leak tests |
+fella is organized around three layers. Every feature serves exactly one.
+
+### Layer 1 — Containment (The Pipe)
+
+If it leaves the NIC, it goes through Tor. Fail-closed.
+
+| Feature | How |
+|---------|-----|
+| **Netns isolation** | Dedicated `fella` network namespace with veth pair. Apps cannot bypass the proxy. |
+| **Fail-closed firewall** | Netns `OUTPUT DROP` by default. Only Tor SOCKS (9050) and DNSPort (5353) allowed. |
+| **DNS enforcement** | Custom `resolv.conf` bind-mounted inside `fella exec` / `fella shell`. All queries via Tor. |
+| **IPv6 disable** | `net.ipv6.conf.all.disable_ipv6=1` inside netns. No AAAA leaks. |
+| **Auto-verify** | After `start`, fella confirms `IsTor=true` at `check.torproject.org`. If false, it aborts and stops. |
+| **Killswitch** | Host iptables restored atomically. Strict mode drops all non-Tor outbound. |
+| **Backend plugins** | Tor (default), WireGuard, or chained VPN→Tor. |
+| **Censorship bridges** | Auto-injects obfs4 / snowflake bridge lines if pluggable transports are installed. |
+
+### Layer 2 — Identity (The Mask)
+
+Every session the machine looks like a different person.
+
+| Feature | How |
+|---------|-----|
+| **Host identity** | Rotates hostname, machine-id, timezone, locale per session. Restored on `stop`. |
+| **MAC rotation** | Vendor-OUI MACs (Intel, Apple, Dell, etc.) with randomized last 3 bytes. Looks like real hardware. |
+| **Browser isolation** | `fella browser` launches ephemeral Firefox with `privacy.resistFingerprinting`, WebRTC off, no history/cache. Profile wiped on exit. |
+
+### Layer 3 — Forensics (The Erase)
+
+After `stop`, an examiner finds nothing.
+
+| Feature | How |
+|---------|-----|
+| **Ephemeral mode** | `--ephemeral` mounts `/var/lib/fella` as tmpfs. All state lives in RAM. |
+| **Anti-forensic wipe** | `fella wipe` performs 3-pass overwrite + `fsync`, then renames files to random 255-byte names before unlink. |
+| **Encrypted state** | `init --encrypt` + `FELLA_PASSPHRASE` encrypts state with XChaCha20-Poly1305. |
+| **Secure memory** | Sensitive buffers are `mlock`ed, `MADV_DONTDUMP`ed, and explicitly zeroed. |
+
+### Defense-in-Depth
+
+| Feature | How | Limitation |
+|---------|-----|------------|
+| **seccomp-bpf** | Blocks ptrace, module loading, userfaultfd, etc. | Root can disable it. Not a primary defense. |
+| **Chain backend** | VPN→Tor hides Tor usage from ISP. | Requires working WG endpoint. Adds latency. |
+| **Process masquerade** | Renames comm to `systemd-resolve`, etc. | `/proc/<pid>/exe` still reveals the binary. Casual obfuscation only. |
+| **Container hardening** | Spoofs `/proc/cpuinfo`, `uname()`, etc. | Hypervisor sees everything in VMs. Bare metal doesn't need this. |
 
 ## Quick Start
 
@@ -175,11 +210,17 @@ fella doctor                Diagnose environment
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Userland                                │
-│  ┌─────────┐    ┌──────────┐    ┌─────────────┐   ┌─────────┐  │
-│  │   CLI   │───▶│  Engine  │───▶│   Backend   │   │ Sandbox │  │
-│  └─────────┘    └──────────┘    │  (Tor/WG)   │   │seccomp  │  │
-│         │              │         └─────────────┘   └─────────┘  │
+│  LAYER 3 — FORENSICS                                            │
+│  • Encrypted state  • Ephemeral tmpfs  • Secure wipe            │
+├─────────────────────────────────────────────────────────────────┤
+│  LAYER 2 — IDENTITY                                             │
+│  • Host rotation  • Vendor MACs  • Browser isolation            │
+├─────────────────────────────────────────────────────────────────┤
+│  LAYER 1 — CONTAINMENT                                          │
+│  ┌─────────┐    ┌──────────┐    ┌─────────────┐                │
+│  │   CLI   │───▶│  Engine  │───▶│   Backend   │                │
+│  └─────────┘    └──────────┘    │  (Tor/WG)   │                │
+│         │              │         └─────────────┘                │
 │         │              ▼              │                          │
 │         │      ┌──────────────┐       │                          │
 │         │      │   Identity   │       │                          │
@@ -189,8 +230,8 @@ fella doctor                Diagnose environment
 │  ┌─────────────┐       ▼                                         │
 │  │   Netns     │◀── veth pair ──▶ Host NAT                       │
 │  │  (fella)    │                                                 │
-│  │  torsocks   │                                                 │
-│  │  fail-closed│                                                 │
+│  │  torsocks   │  DNS bind-mount  IPv6 disabled                  │
+│  │  fail-closed│  OUTPUT DROP  Auto-verify                       │
 │  │  iptables   │                                                 │
 │  └─────────────┘                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -333,12 +374,15 @@ fella randomizes the MAC address of both the primary host interface and the `vet
 
 > **Honest caveat:** If you run `fella exec kubectl` or a Go binary, it will bypass the proxy. Configure the application to use SOCKS5 proxy `10.200.200.1:9050` directly, or run it inside `fella shell` and verify with `fella verify`.
 
-## Security Model
+## What fella does NOT promise
 
-1. **Assume the host network is hostile** — all application traffic is forced through the backend namespace.
-2. **Assume the process may be compromised** — seccomp-bpf blocks `ptrace`, `userfaultfd`, module loading, `bpf`, keyctl, etc.
-3. **Assume disk may be inspected** — state file can be encrypted; session artifacts can be 3-pass wiped.
-4. **Assume containers leak fingerprints** — `/proc/cpuinfo`, `/proc/version`, `/proc/uptime`, kernel params are spoofed via bind-mounts + LD_PRELOAD.
+1. **It does not defeat a global passive adversary.** NSA/Five Eyes with sufficient Tor relay coverage can perform end-to-end confirmation attacks that no client-side tool can fully defeat.
+2. **It does not protect against a compromised kernel.** If the Linux kernel is backdoored, all layers collapse.
+3. **It does not protect against physical seizure while powered.** Cold-boot attacks, DMA, and JTAG can extract RAM contents.
+4. **It does not make you anonymous to the destination.** If you log into your personal email through Tor, the destination knows who you are.
+5. **It does not protect against side channels.** Cache timing, power analysis, and EM are out of scope.
+
+See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full adversary breakdown, attack matrix, and trust assumptions.
 
 ## Testing
 
@@ -383,8 +427,12 @@ sudo ./scripts/validate.sh --all
 - [x] Process masquerade + MAC rotation + ephemeral tmpfs mode
 - [x] Formal threat model document
 
-### v0.5 — "Browser"
-- [ ] Browser fingerprint isolation (ephemeral Firefox profiles)
+### v0.5 — "Browser" ✅
+- [x] Browser fingerprint isolation (ephemeral Firefox profiles)
+- [x] DNS enforcement in netns (bind-mount resolv.conf)
+- [x] IPv6 disable in netns
+- [x] Fail-closed auto-verify (abort if Tor bootstrap fails)
+- [x] Vendor-OUI MAC rotation
 - [ ] WireGuard real-endpoint integration test
 - [ ] Chain backend real-endpoint integration test
 
