@@ -1,318 +1,188 @@
 const std = @import("std");
-const clap = @import("clap");
-const Engine = @import("Engine.zig");
-const platform = @import("platform.zig");
-const Output = @import("Output.zig");
-const Backend = @import("backends/Backend.zig");
-const TestRunner = @import("TestRunner.zig");
+const builtin = @import("builtin");
+const Cli = @import("Cli.zig");
+const Store = @import("Store.zig");
+const Session = @import("Session.zig");
+const Io = std.Io;
 
-const BANNER =
-    \\   _____     __
-    \\  / __(_)__ / /  ___ ___
-    \\ / _// (_-\< / _ \/ -_) _ \
-    \\\/_/ /_/___/_//_/\__/_//_/
+const help =
+    \\fella — contained Linux workspaces, without a daemon or sudo
+    \\
+    \\  fella identity create <name>       Create a separate persistent home
+    \\  fella identity list                List identities
+    \\  fella identity path <name>         Print identity home for setup/backups
+    \\  fella workspace add <name> --identity <name> --path <directory>
+    \\  fella workspace list               List registered workspaces
+    \\  fella workspace remove <name>      Forget registration; never delete data
+    \\  fella show <workspace>             Show identity, paths, network policy
+    \\  fella enter <workspace> [--offline] [-- <command> [args...]]
+    \\  fella doctor                       Test real Linux isolation support
+    \\  fella help | version
+    \\
+    \\Networking is shared with the host unless --offline is specified.
+    \\Only the selected identity home and project are writable host mounts.
+    \\No host credentials, SSH agent, desktop bus, or display are inherited.
+    \\Exit the shell to end the session. Homes and projects persist.
+    \\Launcher signals/direct-command Ctrl-C can hard-stop unsaved applications.
     \\
 ;
 
-const params = clap.parseParamsComptime(
-    \\-h, --help      Display this help and exit.
-    \\-v, --version    Display version and exit.
-    \\--json          Output JSON for status/verify/doctor
-    \\--encrypt       Encrypt state file (init only)
-    \\--backend <str> Backend: tor | wireguard | chain (default: tor)
-    \\--cover         Enable cover traffic padding
-    \\--ephemeral     Keep all session state in RAM-only tmpfs
-    \\<str>
-    \\ 
-);
-
-fn printBanner(io: std.Io, alloc: std.mem.Allocator) !void {
-    try Output.stdoutPrint(io, alloc, "{s}{s}{s}\n", .{ Output.Color.blue, BANNER, Output.Color.reset });
+pub fn main(init: std.process.Init) void {
+    const code = run(init) catch |err| {
+        report(init.io, err) catch {};
+        std.process.exit(1);
+    };
+    if (code != 0) std.process.exit(code);
 }
 
-fn printHelp(io: std.Io) !void {
-    try Output.stdoutWrite(io,
-        \\
-
-        \\Usage: fella <command>
-        \\
-        \\Commands:
-        \\  init                  First-time setup, probe environment
-        \\  init --encrypt        Enable encrypted state storage
-        \\  init --backend <k>    Select backend: tor | wireguard | chain
-        \\  start                 Activate identity + backend + containment
-        \\  start --cover         Enable cover traffic padding
-        \\  start --ephemeral     RAM-only session data (tmpfs)
-        \\  lockdown              Full strict mode (backend-only traffic)
-        \\  lockdown --cover      Strict mode with cover traffic
-        \\  lockdown --ephemeral  Strict mode with RAM-only data
-        \\  stop                  Deactivate everything, restore system
-        \\  rotate                New identity + rotate backend circuit
-        \\  status                Full posture report
-        \\  verify                Run leak and health tests
-        \\  shell                 Drop into routed subshell
-        \\  exec <cmd>            Run a single command in the routed namespace
-        \\  wipe                  Clear session artifacts (secure overwrite)
-        \\  harden                Apply environment patches
-        \\  cover start           Start cover traffic daemon
-        \\  cover stop            Stop cover traffic daemon
-        \\  macrotate start       Start periodic MAC rotation subagent
-        \\  macrotate stop        Stop MAC rotation subagent
-        \\  browser               Launch ephemeral Firefox in netns
-        \\  doctor                Diagnose environment and installation
-        \\  test                  Run built-in integration test suite
-        \\  help                  Show this message
-        \\  version               Show version
-        \\
-    );
+fn run(init: std.process.Init) !u8 {
+    const arena = init.arena.allocator();
+    const command = try Cli.parse(try arguments(init));
+    switch (command) {
+        .help => return output(init.io, help),
+        .version => return print(init, "fella 0.7.0 (Zig {s})\n", .{builtin.zig_version_string}),
+        else => {},
+    }
+    try requireLinuxUser();
+    if (command == .doctor) return doctor(arena, init.io);
+    const home = init.environ_map.get("HOME") orelse return error.InvalidHome;
+    const store: Store = .{
+        .io = init.io,
+        .arena = arena,
+        .root = try Store.dataRoot(arena, home, init.environ_map.get("XDG_DATA_HOME")),
+    };
+    return dispatch(init, store, home, command);
 }
 
-fn parseBackend(s: []const u8) Backend.Kind {
-    if (std.mem.eql(u8, s, "wireguard")) return .wireguard;
-    if (std.mem.eql(u8, s, "chain")) return .chain;
-    return .tor;
-}
-
-pub fn main(init: std.process.Init) !void {
-    const alloc = init.gpa;
-    const io = init.io;
-
-    var iter = try init.minimal.args.iterateAllocator(alloc);
-    defer iter.deinit();
-
-    // Skip argv[0]
+fn arguments(init: std.process.Init) ![]const []const u8 {
+    const arena = init.arena.allocator();
+    var iter = try init.minimal.args.iterateAllocator(arena);
+    var args: std.ArrayList([]const u8) = .empty;
     _ = iter.next();
+    while (iter.next()) |arg| try args.append(arena, arg);
+    return args.items;
+}
 
-    var diag = clap.Diagnostic{};
-    var res = clap.parseEx(clap.Help, &params, clap.parsers.default, &iter, .{
-        .diagnostic = &diag,
-        .allocator = alloc,
-        .terminating_positional = 0,
-    }) catch |err| {
-        try diag.reportToFile(io, .stderr(), err);
-        return err;
-    };
-    defer res.deinit();
+fn requireLinuxUser() !void {
+    if (builtin.os.tag != .linux) return error.LinuxRequired;
+    if (std.c.getuid() == 0 or std.c.geteuid() == 0) return error.RootNotSupported;
+}
 
-    if (res.args.help != 0) {
-        try printHelp(io);
-        return;
-    }
-
-    if (res.args.version != 0) {
-        try Output.stdoutPrint(io, alloc, "fella 0.5.0\n", .{});
-        return;
-    }
-
-    const cmd = res.positionals[0] orelse {
-        try printHelp(io);
-        std.process.exit(1);
-    };
-
-    // Also accept --json after the positional command by scanning raw args
-    const json_mode = res.args.json != 0 or blk: {
-        var raw_iter = try init.minimal.args.iterateAllocator(alloc);
-        defer raw_iter.deinit();
-        while (raw_iter.next()) |arg| {
-            if (std.mem.eql(u8, arg, "--json")) break :blk true;
-        }
-        break :blk false;
-    };
-
-    const env = if (needsEnv(cmd))
-        try platform.probe(alloc)
-    else
-        null;
-    defer if (env) |e| e.deinit();
-
-    var engine = if (env) |e| try Engine.create(alloc, e) else null;
-    defer if (engine) |*eng| eng.deinit();
-
-    if (std.mem.eql(u8, cmd, "init")) {
-        try printBanner(io, alloc);
-        var encrypt = res.args.encrypt != 0;
-        var backend_kind: Backend.Kind = .tor;
-        if (res.args.backend) |b| {
-            backend_kind = parseBackend(b);
-        }
-        while (iter.next()) |arg| {
-            if (std.mem.eql(u8, arg, "--encrypt")) encrypt = true;
-            if (std.mem.eql(u8, arg, "--backend")) {
-                if (iter.next()) |b| backend_kind = parseBackend(b);
-            }
-        }
-        try engine.?.init(io, alloc, encrypt, backend_kind);
-    } else if (std.mem.eql(u8, cmd, "start")) {
-        try printBanner(io, alloc);
-        var with_cover = res.args.cover != 0;
-        var ephemeral = res.args.ephemeral != 0;
-        while (iter.next()) |arg| {
-            if (std.mem.eql(u8, arg, "--cover")) with_cover = true;
-            if (std.mem.eql(u8, arg, "--ephemeral")) ephemeral = true;
-        }
-        try engine.?.start(io, alloc, with_cover, ephemeral);
-    } else if (std.mem.eql(u8, cmd, "lockdown")) {
-        try printBanner(io, alloc);
-        var with_cover = res.args.cover != 0;
-        var ephemeral = res.args.ephemeral != 0;
-        while (iter.next()) |arg| {
-            if (std.mem.eql(u8, arg, "--cover")) with_cover = true;
-            if (std.mem.eql(u8, arg, "--ephemeral")) ephemeral = true;
-        }
-        try engine.?.lockdown(io, alloc, with_cover, ephemeral);
-    } else if (std.mem.eql(u8, cmd, "stop")) {
-        try engine.?.stop(io, alloc);
-    } else if (std.mem.eql(u8, cmd, "rotate")) {
-        try engine.?.rotate(io, alloc);
-    } else if (std.mem.eql(u8, cmd, "status")) {
-        if (json_mode) {
-            try engine.?.statusJson(io, alloc);
-        } else {
-            try engine.?.status(io, alloc);
-        }
-    } else if (std.mem.eql(u8, cmd, "verify")) {
-        if (json_mode) {
-            try engine.?.verifyJson(io, alloc);
-        } else {
-            try engine.?.verify(io, alloc);
-        }
-    } else if (std.mem.eql(u8, cmd, "shell")) {
-        try engine.?.shell(io, alloc);
-    } else if (std.mem.eql(u8, cmd, "exec")) {
-        var argv: std.ArrayList([]const u8) = .empty;
-        defer argv.deinit(alloc);
-        while (iter.next()) |arg| {
-            try argv.append(alloc, arg);
-        }
-        if (argv.items.len == 0) {
-            try Output.stderrWrite(io, "Usage: fella exec <command> [args...]\n");
-            std.process.exit(1);
-        }
-        try engine.?.exec(io, alloc, argv.items);
-    } else if (std.mem.eql(u8, cmd, "wipe")) {
-        try engine.?.wipe(io, alloc);
-    } else if (std.mem.eql(u8, cmd, "harden")) {
-        try engine.?.harden(io, alloc);
-    } else if (std.mem.eql(u8, cmd, "cover")) {
-        const sub = iter.next() orelse {
-            try Output.stderrWrite(io, "Usage: fella cover start|stop\n");
-            std.process.exit(1);
-        };
-        if (std.mem.eql(u8, sub, "start")) {
-            try engine.?.coverStart(io, alloc);
-        } else if (std.mem.eql(u8, sub, "stop")) {
-            try engine.?.coverStop(io, alloc);
-        } else {
-            try Output.stderrWrite(io, "Usage: fella cover start|stop\n");
-            std.process.exit(1);
-        }
-    } else if (std.mem.eql(u8, cmd, "macrotate")) {
-        const sub = iter.next() orelse {
-            try Output.stderrWrite(io, "Usage: fella macrotate start|stop\n");
-            std.process.exit(1);
-        };
-        if (std.mem.eql(u8, sub, "start")) {
-            try engine.?.macRotateStart(io, alloc);
-        } else if (std.mem.eql(u8, sub, "stop")) {
-            try engine.?.macRotateStop(io, alloc);
-        } else {
-            try Output.stderrWrite(io, "Usage: fella macrotate start|stop\n");
-            std.process.exit(1);
-        }
-    } else if (std.mem.eql(u8, cmd, "browser")) {
-        try engine.?.browser(io, alloc);
-    } else if (std.mem.eql(u8, cmd, "doctor")) {
-        if (!json_mode) try printBanner(io, alloc);
-        if (json_mode) {
-            try engine.?.doctorJson(io, alloc);
-        } else {
-            try engine.?.doctor(io, alloc);
-        }
-    } else if (std.mem.eql(u8, cmd, "test")) {
-        if (json_mode) {
-            try runTestJson(io, alloc);
-        } else {
-            try runTestHuman(io, alloc);
-        }
-    } else if (std.mem.eql(u8, cmd, "help")) {
-        try printHelp(io);
-    } else if (std.mem.eql(u8, cmd, "version")) {
-        try Output.stdoutPrint(io, alloc, "fella 0.5.0\n", .{});
-    } else {
-        try Output.stderrWrite(io, "Unknown command: ");
-        try Output.stderrWrite(io, cmd);
-        try Output.stderrWrite(io, "\n");
-        try printHelp(io);
-        std.process.exit(1);
+fn dispatch(init: std.process.Init, store: Store, home: []const u8, command: Cli.Command) !u8 {
+    switch (command) {
+        .identity_create => |name| return createIdentity(init, store, name),
+        .identity_path => |name| return identityPath(init, store, name),
+        .identity_list => return list(init, store, .identities),
+        .workspace_list => return list(init, store, .workspaces),
+        .workspace_add => |add| return addWorkspace(init, store, home, add),
+        .workspace_remove => |name| return removeWorkspace(init, store, name),
+        .show => |name| return show(init, store, name),
+        .enter => |enter| return launch(init, store, home, enter),
+        else => unreachable,
     }
 }
 
-fn runTestHuman(io: std.Io, alloc: std.mem.Allocator) !void {
-    try Output.stdoutPrint(io, alloc, "=== fella Self-Test ===\n", .{});
-    var results: std.ArrayList(TestRunner.Result) = .empty;
-    defer {
-        for (results.items) |r| {
-            alloc.free(r.detail);
-        }
-        results.deinit(alloc);
-    }
-    TestRunner.runAll(io, alloc, &results) catch |err| {
-        try Output.stdoutPrint(io, alloc, "[!] Test runner error: {any}\n", .{err});
+fn createIdentity(init: std.process.Init, store: Store, name: []const u8) !u8 {
+    try store.createIdentity(name);
+    return print(init, "Created identity {s}\n", .{name});
+}
+
+fn identityPath(init: std.process.Init, store: Store, name: []const u8) !u8 {
+    return print(init, "{s}\n", .{try store.identityHome(name)});
+}
+
+fn addWorkspace(init: std.process.Init, store: Store, home: []const u8, add: Cli.Add) !u8 {
+    try store.addWorkspace(add.name, add.identity, add.path, home);
+    return print(init, "Registered {s} with identity {s}\n", .{ add.name, add.identity });
+}
+
+fn removeWorkspace(init: std.process.Init, store: Store, name: []const u8) !u8 {
+    try store.removeWorkspace(name);
+    return output(init.io, "Registration removed; project and identity data kept.\n");
+}
+
+fn list(init: std.process.Init, store: Store, kind: Store.Kind) !u8 {
+    const names = try store.names(kind);
+    for (names) |name| _ = try print(init, "{s}\n", .{name});
+    return 0;
+}
+
+fn show(init: std.process.Init, store: Store, name: []const u8) !u8 {
+    const workspace = try store.loadWorkspace(name);
+    return print(init, "Workspace: {s}\nIdentity:  {s}\nProject:   {s}\nHome:      {s}\nNetwork:   host (use enter --offline to disconnect)\n", .{
+        name, workspace.identity, workspace.path, try store.identityHome(workspace.identity),
+    });
+}
+
+fn launch(init: std.process.Init, store: Store, host_home: []const u8, enter: Cli.Enter) !u8 {
+    const arena = store.arena;
+    const bwrap = try Session.bubblewrap(init.io);
+    const workspace = try store.loadWorkspace(enter.name);
+    // Resolve again: a moved project or symlink must not broaden a saved grant.
+    const project = try store.resolveProject(workspace.path, host_home);
+    if (!std.mem.eql(u8, project, workspace.path)) return error.WorkspaceMoved;
+    const args = try Session.build(arena, bwrap, try Session.availablePaths(arena, init.io), .{
+        .identity = workspace.identity,
+        .workspace_name = enter.name,
+        .home = try store.identityHome(workspace.identity),
+        .identity_etc = try store.identityEtc(workspace.identity),
+        .project = project,
+        .offline = enter.offline,
+        .argv = enter.argv,
+        .term = init.environ_map.get("TERM") orelse "xterm-256color",
+    });
+    // Replace, don't supervise: bwrap owns the PID namespace and exit status.
+    return Session.execute(arena, init.io, args);
+}
+
+fn doctor(arena: std.mem.Allocator, io: Io) !u8 {
+    Io.Dir.accessAbsolute(io, "/bin/bash", .{}) catch return error.BashNotFound;
+    _ = try output(io, "Checking bubblewrap, user/PID/mount/network namespaces...\n");
+    const term = try Session.probe(arena, io);
+    if (!term.success()) return error.IsolationUnavailable;
+    return output(io, "Ready. Sessions need no root and make no host-wide changes.\n");
+}
+
+fn output(io: Io, text: []const u8) !u8 {
+    try Io.File.stdout().writeStreamingAll(io, text);
+    return 0;
+}
+
+fn print(init: std.process.Init, comptime fmt: []const u8, args: anytype) !u8 {
+    return output(init.io, try std.fmt.allocPrint(init.arena.allocator(), fmt, args));
+}
+
+fn report(io: Io, err: anyerror) !void {
+    const hints = .{
+        .{ error.BubblewrapNotFound, "Install bubblewrap with your distribution's package manager." },
+        .{ error.BashNotFound, "Install bash with your distribution's package manager." },
+        .{ error.IsolationUnavailable, "Linux isolation is unavailable. Check user namespaces/AppArmor; there is no unsandboxed fallback." },
+        .{ error.DescriptorIsolationUnavailable, "File-descriptor isolation requires Linux 5.11+ and permitted close_range(CLOEXEC)." },
+        .{ error.RootNotSupported, "Run as your normal user, not through sudo." },
+        .{ error.LinuxRequired, "Sessions require Linux. Builds/unit tests can run on macOS." },
+        .{ error.InvalidArguments, "Invalid arguments. See 'fella help'." },
+        .{ error.UnknownCommand, "Unknown command. See 'fella help'." },
+        .{ error.InvalidName, "Names must be 1–48 letters, numbers, hyphens or underscores." },
+        .{ error.InvalidHome, "HOME must name an existing absolute home directory." },
+        .{ error.InvalidDataHome, "XDG_DATA_HOME must be an absolute directory path." },
+        .{ error.IdentityNotFound, "Create the identity first with 'fella identity create <name>'." },
+        .{ error.WorkspaceNotFound, "Register the workspace first with 'fella workspace add'." },
+        .{ error.UnsafeWorkspacePath, "Select a project directory, not a host tree, entire home, or fella data directory." },
+        .{ error.WorkspaceMoved, "The project path changed through a symlink. Remove and re-register the workspace." },
+        .{ error.InsecureDataDirectory, "Fella's data directory must be private (mode 0700)." },
+        .{ error.PathAlreadyExists, "That name already exists; existing data was not replaced." },
     };
-
-    var pass: usize = 0;
-    var fail: usize = 0;
-    for (results.items) |r| {
-        const color = if (r.passed) Output.Color.green else Output.Color.red;
-        const status = if (r.passed) "PASS" else "FAIL";
-        try Output.stdoutPrint(io, alloc, "  {s}{s}{s} {s}: {s}\n", .{ color, status, Output.Color.reset, r.name, r.detail });
-        if (r.passed) pass += 1 else fail += 1;
+    var buffer: [1024]u8 = undefined;
+    var text: []const u8 = "Check paths and permissions; no unsandboxed fallback was used.";
+    inline for (hints) |hint| {
+        if (err == hint[0]) text = hint[1];
     }
-    try Output.stdoutPrint(io, alloc, "\n{s}[*] Tests complete{s} — {d}/{d} passed\n", .{ Output.Color.blue, Output.Color.reset, pass, results.items.len });
-    if (fail > 0) std.process.exit(1);
+    const message = try std.fmt.bufPrint(&buffer, "fella: {s}: {s}\n", .{ @errorName(err), text });
+    try Io.File.stderr().writeStreamingAll(io, message);
 }
 
-fn runTestJson(io: std.Io, alloc: std.mem.Allocator) !void {
-    var results: std.ArrayList(TestRunner.Result) = .empty;
-    defer {
-        for (results.items) |r| {
-            alloc.free(r.detail);
-        }
-        results.deinit(alloc);
-    }
-    TestRunner.runAll(io, alloc, &results) catch {};
-
-    var pass: usize = 0;
-    var fail: usize = 0;
-    for (results.items) |r| {
-        if (r.passed) pass += 1 else fail += 1;
-    }
-
-    try Output.stdoutPrint(io, alloc, "{{\"pass\":{d},\"fail\":{d},\"total\":{d},\"results\":[", .{ pass, fail, results.items.len });
-    for (results.items, 0..) |r, i| {
-        if (i > 0) try Output.stdoutWrite(io, ",");
-        try Output.stdoutPrint(io, alloc, "{{\"name\":\"{s}\",\"passed\":{},\"detail\":\"", .{ r.name, r.passed });
-        for (r.detail) |c| {
-            if (c == '"') {
-                try Output.stdoutWrite(io, "\\\"");
-            } else if (c == '\\') {
-                try Output.stdoutWrite(io, "\\\\");
-            } else if (c >= 0x20 and c < 0x7f) {
-                try Output.stdoutWrite(io, &[_]u8{c});
-            } else {
-                try Output.stdoutWrite(io, "?");
-            }
-        }
-        try Output.stdoutWrite(io, "\"}");
-    }
-    try Output.stdoutWrite(io, "]}\n");
-    if (fail > 0) std.process.exit(1);
-}
-
-fn needsEnv(cmd: []const u8) bool {
-    const env_cmds = .{ "init", "start", "lockdown", "stop", "rotate", "status", "verify", "shell", "exec", "wipe", "harden", "cover", "macrotate", "browser", "doctor", "test" };
-    inline for (env_cmds) |c| {
-        if (std.mem.eql(u8, cmd, c)) return true;
-    }
-    return false;
+test {
+    _ = Cli;
+    _ = Store;
+    _ = Session;
 }

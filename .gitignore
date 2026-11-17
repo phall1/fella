@@ -30,3 +30,7 @@ Thumbs.db
 # Coverage / logs
 *.log
 coverage/
+
+# Python test tooling
+__pycache__/
+*.pyc

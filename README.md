@@ -1,481 +1,174 @@
 # fella
 
-[![Zig](https://img.shields.io/badge/Zig-0.16.0-orange.svg)](https://ziglang.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20x86__64%20%7C%20aarch64-blue.svg)](https://kernel.org/)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#testing)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+**A small Linux tool for keeping workspaces and identities separate.**
 
-> **A network identity and traffic containment framework for hostile networks.**
->
-> **Layer 1 — Containment:** All traffic is forced through the tunnel inside an isolated netns. Fail-closed.
-> **Layer 2 — Identity:** Every session the machine looks like a different person.
-> **Layer 3 — Forensics:** After `stop`, an examiner finds nothing.
->
-> Written in Zig. Zero shell dependency. Real integration tests.
+Enter a project with its own home, configuration, credentials, and shell history.
+Leave it by exiting the shell. Come back tomorrow and everything you chose to
+keep is still there.
 
-```
-   _____     __
-  / __(_)__ / /  ___ ___
- / _// (_-< / _ \/ -_) _ \
-/_/ /_/___/_//_/\__/_//_/
-```
+No daemon. No sudo. No Tor. No host identity changes or firewall rewrites.
 
-**fella** is a traffic containment and identity rotation framework for hostile networks. It isolates all traffic inside a dedicated network namespace, rotates your system's identity artifacts per session, and routes through modern encrypted tunnels (WireGuard) with kernel-level traffic shaping and DPI obfuscation. Tor is supported as a legacy zero-infrastructure fallback.
+## Use it
 
-## Why fella?
+Use Linux 5.11+ with user namespaces enabled. Install `bubblewrap` and `bash`
+using your Linux distribution's package manager.
+Install the fella binary, or [build it](#build). Then, as your normal user:
 
-Most "privacy tools" are shell scripts wrapped in sudo. **fella** is different:
-
-- **Compiled language** (Zig 0.16) — testable, auditable, cross-compiles to bare metal
-- **Real containment** — dedicated `fella` netns with veth pair. Fail-closed iptables. DNS bind-mount. IPv6 disabled.
-- **Modern tunnels** — WireGuard-first with kernel `tc` traffic shaping and udp2raw DPI obfuscation
-- **Fail-closed by design** — auto-verifies tunnel health. If the backend drops, traffic stops, not leaks.
-- **Forensic resistance** — encrypted state, secure memory (`mlock` + `MADV_DONTDUMP`), 3-pass anti-forensic wipe
-- **Identity isolation** — Vendor-OUI MAC rotation, hostname/machine-id/timezone/locale rotation, ephemeral browser profiles
-
-## What It Does
-
-fella is organized around three layers. Every feature serves exactly one.
-
-### Layer 1 — Containment (The Pipe)
-
-If it leaves the NIC, it goes through the tunnel. Fail-closed.
-
-| Feature | How |
-|---------|-----|
-| **Netns isolation** | Dedicated `fella` network namespace with veth pair. Apps cannot bypass the proxy. |
-| **Fail-closed firewall** | Netns `OUTPUT DROP` by default. Only tunnel traffic allowed. |
-| **DNS enforcement** | Custom `resolv.conf` bind-mounted inside `fella exec` / `fella shell`. All queries via tunnel DNS. |
-| **IPv6 disable** | `net.ipv6.conf.all.disable_ipv6=1` inside netns. No AAAA leaks. |
-| **Auto-verify** | After `start`, fella confirms tunnel health. If false, it aborts and stops. |
-| **Killswitch** | Host iptables restored atomically. Strict mode drops all non-tunnel outbound. |
-| **Backend plugins** | WireGuard (default if config present), Tor (legacy fallback), or chained VPN→Tor. |
-| **Traffic shaping** | Kernel `tc` enforces constant-rate cells on WireGuard traffic. |
-| **DPI obfuscation** | Auto-detects `udp2raw` to tunnel WireGuard UDP through fake TCP. |
-| **Censorship bridges** | Auto-injects obfs4 / snowflake bridge lines for Tor if pluggable transports are installed. |
-
-### Layer 2 — Identity (The Mask)
-
-Every session the machine looks like a different person.
-
-| Feature | How |
-|---------|-----|
-| **Host identity** | Rotates hostname, machine-id, timezone, locale per session. Restored on `stop`. |
-| **MAC rotation** | Vendor-OUI MACs (Intel, Apple, Dell, etc.) with randomized last 3 bytes. Looks like real hardware. |
-| **Browser isolation** | `fella browser` launches ephemeral Firefox with `privacy.resistFingerprinting`, WebRTC off, no history/cache. Profile wiped on exit. |
-
-### Layer 3 — Forensics (The Erase)
-
-After `stop`, an examiner finds nothing.
-
-| Feature | How |
-|---------|-----|
-| **Ephemeral mode** | `--ephemeral` mounts `/var/lib/fella` as tmpfs. All state lives in RAM. |
-| **Anti-forensic wipe** | `fella wipe` performs 3-pass overwrite + `fsync`, then renames files to random 255-byte names before unlink. |
-| **Encrypted state** | `init --encrypt` + `FELLA_PASSPHRASE` encrypts state with XChaCha20-Poly1305. |
-| **Secure memory** | Sensitive buffers are `mlock`ed, `MADV_DONTDUMP`ed, and explicitly zeroed. |
-
-### Defense-in-Depth
-
-| Feature | How | Limitation |
-|---------|-----|------------|
-| **seccomp-bpf** | Blocks ptrace, module loading, userfaultfd, etc. | Root can disable it. Not a primary defense. |
-| **Chain backend** | VPN→Tor hides Tor usage from ISP. | Requires working WG endpoint. Adds latency. |
-| **Process masquerade** | Renames comm to `systemd-resolve`, etc. | `/proc/<pid>/exe` still reveals the binary. Casual obfuscation only. |
-| **Container hardening** | Spoofs `/proc/cpuinfo`, `uname()`, etc. | Hypervisor sees everything in VMs. Bare metal doesn't need this. |
-
-## Quick Start
-
-```bash
-# Clone and build
-git clone https://github.com/phall1/fella.git
-cd fella
-zig build
-
-# Initialize (WireGuard is default if wireguard.conf exists)
-sudo ./zig-out/bin/fella init
-sudo ./zig-out/bin/fella init --backend wireguard   # requires /var/lib/fella/wireguard.conf
-sudo ./zig-out/bin/fella init --backend chain       # VPN -> Tor, requires wireguard.conf
-sudo ./zig-out/bin/fella init --backend tor         # legacy zero-infrastructure fallback
-
-# Activate
-sudo ./zig-out/bin/fella start                      # identity + backend + netns + killswitch + seccomp
-sudo ./zig-out/bin/fella start --ephemeral          # RAM-only session state
-
-# Use
-sudo ./zig-out/bin/fella shell          # drop into routed subshell
-sudo ./zig-out/bin/fella exec curl -s https://check.torproject.org/api/ip
-sudo ./zig-out/bin/fella verify         # run leak tests
-sudo ./zig-out/bin/fella status         # full posture report
-
-# Panic button
-sudo ./zig-out/bin/fella wipe           # secure-delete session artifacts
-sudo ./zig-out/bin/fella stop           # restore identity + teardown netns
+```sh
+fella doctor
+fella identity create work
+fella workspace add app --identity work --path ~/code/app
+fella enter app
 ```
 
-### Encrypted State
+Inside, `/workspace` is your project and `/home/fella` is the identity's persistent
+home. The prompt shows `[fella:work/app]`. Set up Git and log into tools **inside
+that identity**, once:
 
-```bash
-export FELLA_PASSPHRASE="correct horse battery staple"
-sudo ./zig-out/bin/fella init --encrypt
-sudo ./zig-out/bin/fella start
+```sh
+git config --global user.name "Work Name"
+git config --global user.email "work@example.com"
+exit
 ```
 
-## Requirements
+Run a command without opening a shell:
 
-- **Zig 0.16.0** — [download](https://ziglang.org/download/)
-- **Linux** (x86_64 or aarch64) with `CAP_SYS_ADMIN` + `CAP_NET_ADMIN`
-- **root** — required for netns, iptables, hostname, etc.
-
-Optional packages:
-- `tor` + `torsocks` — Tor backend
-- `wireguard-tools` (`wg`, `wireguard` kernel module) — WireGuard backend
-- `iptables` / `ip6tables` — killswitch
-- `iproute2` (`ip`) — netns management
-
-## Install
-
-### Method 1: Prebuilt Binary (fastest)
-
-We publish binaries for every release via [GitHub Releases](https://github.com/phall1/fella/releases).
-
-```bash
-# Pick your architecture: x86_64 or aarch64
-ARCH=$(uname -m)
-VERSION=$(curl -s https://api.github.com/repos/phall1/fella/releases/latest | grep tag_name | cut -d '"' -f 4)
-
-sudo curl -fsSL -o /usr/local/bin/fella \
-  "https://github.com/phall1/fella/releases/download/${VERSION}/fella-${VERSION}-${ARCH}-linux"
-sudo chmod +x /usr/local/bin/fella
-sudo mkdir -p /var/lib/fella /var/lib/fella/original /var/lib/fella/tor
+```sh
+fella enter app -- git status
+fella enter app --offline -- make test
 ```
 
-You still need runtime dependencies. The install script below can set those up.
+Create another identity for unrelated work. Workspaces using the same identity
+intentionally share its home and credentials; different identities do not.
+Opening a second terminal gives you a second session, with no global "active
+identity" to accidentally switch underneath an existing command.
 
-### Method 2: One-Line Curl Install (builds from source)
+## The small model
 
-The install script detects your package manager, installs missing dependencies, downloads Zig if needed, clones the repo, builds fella, and installs it.
+| Concept | What persists |
+|---|---|
+| **Identity** | A named home: application configuration, credentials, history, caches, user-installed tools |
+| **Workspace** | A name associating an existing project directory with an identity |
+| **Session** | A foreground shell or command; its temporary files and process namespace disappear on exit |
 
-```bash
-# Interactive — tells you what's missing and how to install it
-curl -sL https://raw.githubusercontent.com/phall1/fella/main/scripts/install.sh | sudo bash
+Project files remain in the directory you selected. Identity homes and workspace
+registrations live in `${XDG_DATA_HOME:-$HOME/.local/share}/fella`, privately
+created with mode 0700; registration files are 0600.
 
-# Fully automatic — installs deps, downloads Zig, builds, and installs
-curl -sL https://raw.githubusercontent.com/phall1/fella/main/scripts/install.sh | sudo bash -s -- --auto
+```sh
+fella identity list
+fella identity path work       # locate the home for setup and backups
+fella workspace list
+fella show app
+fella workspace remove app     # forget the association; NEVER delete project/home
 ```
 
-Supported platforms: Ubuntu/Debian (`apt`), Fedora/RHEL (`dnf`), Arch (`pacman`), Alpine (`apk`).
+There is deliberately no `wipe`, destructive identity removal, or automatic
+credential import. Back up identity homes as you would your normal home.
+To change an association, remove and re-add its registration. A deleted or
+retargeted project fails to launch rather than opening an unrelated directory.
 
-What `--auto` installs:
-- `iptables`, `iproute2`, `tor`, `torsocks`, `wireguard-tools`
-- `curl`, `git`, `gcc` (for `fella harden`)
-- Zig 0.16.0 into `/opt/zig-0.16.0` with a symlink at `/usr/local/bin/zig`
+## What containment means here
 
-### Method 3: Clone and Build Manually
+Fella uses **bubblewrap**, rather than implementing Linux isolation itself:
 
-```bash
-git clone https://github.com/phall1/fella.git
-cd fella
-make              # or: zig build
-sudo make install
+- Only the selected home and project are writable host filesystem mounts.
+- Installed system programs/libraries and a small allowlist of system
+  configuration (DNS, certificates, timezone, loader configuration) are read-only.
+- Other homes, the host's `/tmp`, host processes, display sockets, desktop bus,
+  and SSH-agent paths are not mounted.
+- The environment starts empty. Only standard session variables and `TERM`
+  are provided; host tokens and configuration overrides are not forwarded.
+- Inherited non-stdio file descriptors are closed at exec, so an already-open
+  host file or agent socket cannot silently cross the filesystem policy.
+- `/tmp` and `/run` are private and temporary. Background descendants are
+  terminated when the session ends, including if its launcher is killed.
+- Normal networking is **the host's networking**, including its IP address,
+  DNS, and reachable local services. `--offline` creates a disconnected network
+  namespace. Fella does not configure a VPN or claim anonymity.
+- Missing bubblewrap or denied namespace support is an error. There is
+  **no unsandboxed fallback**. `doctor` actually tests namespace creation.
+
+**This is compartmentalization for your own work, not a promise that arbitrary
+malware is safe to run.** Sessions share the Linux kernel, host user account,
+installed system tools, and terminal. Host networking permits access to local
+services and abstract Unix sockets. A selected project may itself contain
+credentials, executable hooks, or hardlinks. Sharing a project between identities
+shares that content. Root or another process acting as your host user can still
+read identity data. No resource quotas, encrypted storage, secure deletion,
+browser-fingerprint spoofing, or forensic deniability are claimed.
+
+The interactive shell intentionally retains normal terminal job control.
+It shares the terminal with the host; it is not a terminal-injection defense.
+Use a VM or a dedicated hardened sandbox for hostile code.
+
+Exit normally to let applications save their data. **Inside the interactive
+shell**, Ctrl-C reaches its foreground job and leaves the session usable.
+Ctrl-C in direct-command mode (`enter … -- command`) can instead hard-cancel
+the session; graceful application cleanup is not guaranteed. Signals sent
+directly to the launcher's PID, **including SIGTERM**, are hard cancellation:
+bubblewrap tears down the session, without forwarding application shutdown
+handlers. For graceful automated shutdown, signal the application from inside
+the session before ending it. Killing a session can lose unsaved application
+state, just as killing the application can.
+
+GUI applications, desktop/workspace switching, host agent forwarding, custom
+environment passthrough, and transports are deferred. The initial product is
+terminal-first. They can extend the resolved session plan later without
+reintroducing host-wide state management.
+
+## Build
+
+Zig **0.17.1** (latest stable at this rebuild), no third-party Zig dependencies:
+
+```sh
+mise install                  # optional: toolchain pin in .mise.toml
+zig build -Doptimize=ReleaseSafe
+install -Dm755 zig-out/bin/fella ~/.local/bin/fella
 ```
 
-## Commands
+Alternatively `bash scripts/zig.sh build -Doptimize=ReleaseSafe` downloads the
+pinned compiler from ziglang.org, verifies its SHA-256, and caches it privately.
+It does not change your system Zig. Runtime needs only fella, bubblewrap, bash,
+and whatever programs you want to run. Tools installed inside an identity's
+`~/.local/bin` are on its PATH; programs installed only in your **host** home
+are intentionally not available.
 
-```
-fella init                  Probe environment, first-time setup
-fella init --encrypt        Enable encrypted state storage
-fella init --backend <k>    Select backend: tor | wireguard | chain
-fella start                 Activate identity + backend + containment
-fella start --cover         Enable traffic padding noise
-fella start --ephemeral     RAM-only session data (tmpfs)
-fella lockdown              Strict killswitch (backend-only traffic)
-fella lockdown --cover      Strict mode with traffic padding
-fella lockdown --ephemeral  Strict mode with RAM-only data
-fella cover start           Start padding subagent
-fella cover stop            Stop padding subagent
-fella macrotate start       Start periodic MAC rotation subagent
-fella macrotate stop        Stop MAC rotation subagent
-fella browser               Launch ephemeral Firefox in netns
-fella stop                  Deactivate everything, restore system
-fella rotate                New identity + rotate MACs + rotate backend circuit
-fella status                Show current posture
-fella verify                Run leak/health tests
-fella shell                 Drop into routed subshell (isolated netns)
-fella exec <cmd>            Run a single command in the routed namespace
-fella wipe                  Secure-delete session artifacts
-fella harden                Apply container fingerprint patches
-fella doctor                Diagnose environment
-```
+## Verification
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  LAYER 3 — FORENSICS                                            │
-│  • Encrypted state  • Ephemeral tmpfs  • Secure wipe            │
-├─────────────────────────────────────────────────────────────────┤
-│  LAYER 2 — IDENTITY                                             │
-│  • Host rotation  • Vendor MACs  • Browser isolation            │
-├─────────────────────────────────────────────────────────────────┤
-│  LAYER 1 — CONTAINMENT                                          │
-│  ┌─────────┐    ┌──────────┐    ┌─────────────┐                │
-│  │   CLI   │───▶│  Engine  │───▶│   Backend   │                │
-│  └─────────┘    └──────────┘    │  (Tor/WG)   │                │
-│         │              │         └─────────────┘                │
-│         │              ▼              │                          │
-│         │      ┌──────────────┐       │                          │
-│         │      │   Identity   │       │                          │
-│         │      │  Rotation    │◀──────┘                          │
-│         │      └──────────────┘                                  │
-│         ▼              │                                         │
-│  ┌─────────────┐       ▼                                         │
-│  │   Netns     │◀── veth pair ──▶ Host NAT                       │
-│  │  (fella)    │                                                 │
-│  │  torsocks   │  DNS bind-mount  IPv6 disabled                  │
-│  │  fail-closed│  OUTPUT DROP  Auto-verify                       │
-│  │  iptables   │                                                 │
-│  └─────────────┘                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Backend Plugin System
-
-Backends are swappable unions implementing `start`, `stop`, `rotate`, and `isRunning`.
-
-```zig
-const Backend = @import("backends/Backend.zig");
-const Kind = Backend.Kind;  // .tor | .wireguard | .chain
-
-var b = Backend.create(Kind.tor);
-try b.start(io, alloc);
-```
-
-### WireGuard Backend (default if config exists)
-
-The modern, recommended backend. WireGuard uses the Noise protocol framework, is fast, and has a small attack surface. fella adds kernel `tc` traffic shaping and optional `udp2raw` DPI obfuscation.
-
-Requires `/var/lib/fella/wireguard.conf`:
-
-```ini
-[Interface]
-PrivateKey = <your private key>
-Address = 10.0.0.2/24
-ListenPort = 51820
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = <peer public key>
-Endpoint = your-server:51820
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-```
-
-Activate with:
-
-```bash
-sudo ./zig-out/bin/fella init --backend wireguard
-sudo ./zig-out/bin/fella start
-```
-
-**DPI resistance:** Install `udp2raw` on both client and server to tunnel WireGuard UDP through fake TCP:
-```bash
-# https://github.com/wangyu-/udp2raw
-sudo ./zig-out/bin/fella start  # fella auto-detects and starts udp2raw
-```
-
-**Traffic shaping:** fella applies `tc tbf` to the WireGuard interface to enforce constant-rate cells, defeating timing analysis.
-
-### Tor Backend (legacy fallback)
-
-Zero-infrastructure fallback — no server needed, but traffic is fingerprintable at the network level and exit nodes are actively monitored.
-
-- Fork/exec `tor` with generated `torrc`
-- SOCKS5 on `127.0.0.1:9050` + `10.200.200.1:9050`
-- DNS on `127.0.0.1:5353` + `10.200.200.1:5353`
-- ControlPort on `127.0.0.1:9051` for circuit rotation
-
-```bash
-sudo ./zig-out/bin/fella init --backend tor
-sudo ./zig-out/bin/fella start
-```
-
-### Chained Backend (VPN → Tor)
-
-Layer Tor on top of WireGuard. Your exit IP is a Tor exit node, but Tor's own traffic flows through the WireGuard tunnel first.
-
-```bash
-sudo cp your-wireguard.conf /var/lib/fella/wireguard.conf
-sudo ./zig-out/bin/fella init --backend chain
-sudo ./zig-out/bin/fella start
-```
-
-The chain path is:
-
-```
-netns app → torsocks → Tor SOCKS (host) → Tor outbound bound to WG IP → WireGuard tunnel
-```
-
-### Traffic Padding
-
-Tor alone does not hide *when* you send traffic or *how much*. A nation-state passive adversary can correlate bursts entering and exiting the Tor network. fella runs a background subagent that emits fixed-size HTTP POSTs through the tunnel at a fixed 100ms interval. This adds noise to the tunnel stream, making size/timing correlation harder.
-
-> **Honest caveat:** This is *padding noise*, not mathematically constant-rate traffic shaping. A sophisticated adversary can still distinguish real bursts from padding if they have enough vantage points. For true constant-rate shaping you need application-level control of the Tor circuit itself.
-
-```bash
-sudo ./zig-out/bin/fella start --cover
-# or manually
-sudo ./zig-out/bin/fella cover start
-sudo ./zig-out/bin/fella cover stop
-```
-
-### Browser Fingerprint Isolation
-
-The browser is the #1 identity leak vector. `fella browser` launches an ephemeral Firefox profile inside the fella netns with:
-
-- `privacy.resistFingerprinting` enabled
-- WebRTC disabled (prevents local IP leaks)
-- WebGL disabled
-- Canvas capture disabled
-- Disk cache, session restore, and history disabled
-- SOCKS5 proxy configured directly to Tor (no torsocks LD_PRELOAD)
-- Telemetry, SafeBrowsing, and Pocket disabled
-- Profile wiped from `/tmp` when Firefox exits
-
-```bash
-sudo fella start
-sudo fella browser
-```
-
-### Censorship-Resistant Bridges
-
-If you are behind a firewall that blocks Tor (e.g., China, Iran, Russia), install `obfs4proxy` or `snowflake-client` and fella will auto-inject bridge lines into `torrc`:
-
-```bash
-# Debian/Ubuntu
-sudo apt install obfs4proxy
-
-# Then start normally
-sudo fella init
-sudo fella start
-```
-
-You can also supply your own bridges:
-
-```bash
-sudo cp my-bridges.conf /var/lib/fella/bridges.conf
-sudo fella start
-```
-
-## Operational Security Notes
-
-### Ephemeral Mode
-
-```bash
-sudo fella start --ephemeral
-```
-
-This mounts `/var/lib/fella` as a **tmpfs**. Every byte of session state — identity backups, Tor data, configs, keys, state file — lives in RAM only. Pull the plug or unmount, and it evaporates. This is the mode you want if physical seizure is in your threat model.
-
-### Process Masquerade
-
-On every `start`/`lockdown`, fella renames its own process to something boring like `systemd-resolve`, `systemd-network`, or `dbus-daemon`. `ps`, `top`, and `/proc/<pid>/comm` show the fake name.
-
-> **Honest caveat:** This is *casual obfuscation*, not forensic resistance. `/proc/<pid>/exe` and `/proc/<pid>/cmdline` still reveal the real binary path. It helps against shoulder-surfing sysadmins, not a determined investigator.
-
-### MAC Address Rotation
-
-fella randomizes the MAC address of both the primary host interface and the `veth-fella-host` pair on every start/rotate. Original MACs are saved to `/var/lib/fella/original/mac/` and restored on `stop`. This breaks L2 tracking, DHCP fingerprinting, and router logging correlation.
-
-### `fella exec` and Statically-Linked Binaries
-
-`fella exec` routes traffic through Tor using `torsocks`, which works via `LD_PRELOAD`. **Statically-linked binaries** (Go, Rust with `musl`, some security tools) do not load shared libraries and therefore bypass `torsocks` entirely, leaking your real IP.
-
-> **Honest caveat:** If you run `fella exec kubectl` or a Go binary, it will bypass the proxy. Configure the application to use SOCKS5 proxy `10.200.200.1:9050` directly, or run it inside `fella shell` and verify with `fella verify`.
-
-## What fella does NOT promise
-
-1. **It does not defeat a global passive adversary.** NSA/Five Eyes with sufficient Tor relay coverage can perform end-to-end confirmation attacks that no client-side tool can fully defeat.
-2. **It does not protect against a compromised kernel.** If the Linux kernel is backdoored, all layers collapse.
-3. **It does not protect against physical seizure while powered.** Cold-boot attacks, DMA, and JTAG can extract RAM contents.
-4. **It does not make you anonymous to the destination.** If you log into your personal email through Tor, the destination knows who you are.
-5. **It does not protect against side channels.** Cache timing, power analysis, and EM are out of scope.
-
-See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the full adversary breakdown, attack matrix, and trust assumptions.
-
-## Testing
-
-We don't do "tests for coverage." We do **real integration tests** that modify actual system state inside containers.
-
-```bash
-# Unit tests
+```sh
 zig build test
-
-# Integration (needs root)
-sudo ./scripts/validate.sh --integration
-
-# Everything
-sudo ./scripts/validate.sh --all
+zig build
+python3 tests/integration.py zig-out/bin/fella   # Linux, normal user, bubblewrap
 ```
 
-| Suite | Tests | Status |
-|-------|-------|--------|
-| Unit | Crypto, State, Transport, MAC, Passphrase | ✅ PASS |
-| Identity Rotation | hostname rotate + restore | ✅ PASS |
-| Tor Backend | daemon lifecycle, SOCKS, status | ✅ PASS |
-| Netns Routing | traffic routes through Tor via `fella exec` | ✅ PASS |
-| Platform Probe | SYS_ADMIN / NET_ADMIN detection | ✅ PASS |
-| WireGuard Backend | backend persistence + graceful config failures | ✅ PASS |
-| E2E Full Session | init → start → verify → rotate → stop | ✅ PASS |
+The integration suite uses temporary directories and a local test socket, not
+Tor, a VPN server, root, or a privileged container. It exercises persistence,
+separate homes, environment/credential exclusion, literal argv, exit codes,
+offline networking, read-only system mounts, concurrent registration, corrupt
+metadata, crash cleanup, and an actual interactive PTY.
 
-## Roadmap
+From macOS, with an existing OrbStack Linux machine:
 
-### v0.3.0 "Ghost" ✅
-- [x] Encrypted state (XChaCha20-Poly1305)
-- [x] Secure memory (`mlock`, `MADV_DONTDUMP`, explicit zeroing)
-- [x] 3-pass anti-forensic wipe
-- [x] Atomic `iptables-restore` killswitch
-- [x] Silent cleanup / no stderr noise
+```sh
+bash scripts/orb-test.sh fella-test
+```
 
-### v0.4.0 "Chain" ✅
-- [x] seccomp-bpf sandbox
-- [x] Backend plugin architecture (Tor, WireGuard, Chain)
-- [x] Backend chaining: VPN → Tor (`--backend chain`)
-- [x] Traffic padding subagent (`start --cover`, `fella cover start|stop`)
-- [x] Censorship bridges (obfs4 / snowflake auto-detection)
-- [x] Process masquerade + MAC rotation + ephemeral tmpfs mode
-- [x] Formal threat model document
+Install `bubblewrap`, `bash`, and `python3` in that VM first. The harness streams
+the source into a fresh temporary directory and builds/tests on the VM's native
+filesystem. It never clears an existing checkout or installs packages itself.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture and validation.
 
-### v0.5 — "Browser" ✅
-- [x] Browser fingerprint isolation (ephemeral Firefox profiles)
-- [x] DNS enforcement in netns (bind-mount resolv.conf)
-- [x] IPv6 disable in netns
-- [x] Fail-closed auto-verify (abort if Tor bootstrap fails)
-- [x] Vendor-OUI MAC rotation
-- [ ] WireGuard real-endpoint integration test
-- [ ] Chain backend real-endpoint integration test
+## Coming from the old privacy prototype
 
-See [docs/tracking/status.md](docs/tracking/status.md) and [docs/tracking/nation-state-roadmap.md](docs/tracking/nation-state-roadmap.md) for the full gap analysis.
+This is an intentional replacement, not a compatible upgrade of the old
+root-operated CLI. If the old version is active, use **that version's `stop`**
+to restore the host before switching binaries. Do not wipe its restoration
+backups first.
 
-## Threat Model
+This version neither reads nor removes `/var/lib/fella`, old personas, Tor
+configuration, namespaces, or firewall state. There is no automatic migration
+of simulated identities into real application credentials. The old prototype
+remains in Git history.
 
-fella is built for a specific set of adversaries and makes explicit trade-offs. It does **not** claim to defeat a global passive adversary with infinite resources.
-
-See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for:
-- Asset inventory
-- Adversary capabilities (ISP, nation-state firewall, endpoint forensics, global passive)
-- Mitigations and gaps matrix
-- Operational security recommendations
-- Trust assumptions
-
-## Development
-
-See [DEVELOPMENT.md](DEVELOPMENT.md) for module lifecycle, acceptance criteria, and testing philosophy.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-## Warning
-
-This tool is for **authorized security research, CTFs, journalism, and privacy-conscious browsing only**. The authors assume no liability for misuse.
+MIT.

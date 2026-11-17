@@ -1,20 +1,7 @@
 .{
     .name = .fella,
-    .version = "0.1.0",
-    .minimum_zig_version = "0.16.0",
-    .dependencies = .{
-        .clap = .{
-            .url = "git+https://github.com/Hejsil/zig-clap#0.12.0",
-            .hash = "clap-0.12.0-oBajB7foAQDqlSwaSG5g0yq7xGbQARUsBk5T64gAOqP5",
-        },
-    },
-    .paths = .{
-        "build.zig",
-        "build.zig.zon",
-        "src",
-        "scripts",
-        "docs",
-        "README.md",
-    },
+    .version = "0.7.0",
+    .minimum_zig_version = "0.17.1",
     .fingerprint = 0x6e9835e0257561da,
+    .paths = .{ "build.zig", "build.zig.zon", ".mise.toml", "src", "tests", "scripts", "README.md", "DEVELOPMENT.md", "CONTEXT.md", "LICENSE" },
 }
