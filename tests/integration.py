@@ -317,7 +317,11 @@ class Sessions(unittest.TestCase):
         self.addCleanup(session.close)
         prompt = b"[fella:work/project] /workspace $ "
         session.read_until(prompt)
-        session.send(b"printf 'interrupt-ready\\n'; sleep 30\n")
+        # Readiness must come from the foreground child after job-control
+        # handoff, not from a preceding shell builtin.
+        session.send(
+            b"python3 -c 'import time; print(\"interrupt-ready\", flush=True); time.sleep(30)'\n"
+        )
         session.read_until(b"interrupt-ready\r\n")
         session.send(b"\x03")
         session.read_until(prompt)
