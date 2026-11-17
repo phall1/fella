@@ -19,7 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install runtime/test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap bash python3 shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap bash python3 shellcheck apparmor
+      - name: Allow the distro sandbox helper to create user namespaces
+        run: |
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sysctl kernel.apparmor_restrict_unprivileged_userns
+            sudo apparmor_parser -r contrib/apparmor/fella-bwrap
+          fi
       - uses: actions/cache@v4
         with:
           path: ~/.cache/fella-toolchains

@@ -1,0 +1,9 @@
+# Ubuntu's per-application user-namespace permission. This applies to the
+# distro bubblewrap helper, not to arbitrary unconfined programs.
+# It does not disable AppArmor or the global user-namespace restriction.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile fella-bwrap /usr/bin/bwrap flags=(unconfined) {
+    userns,
+}

@@ -159,6 +159,30 @@ the source into a fresh temporary directory and builds/tests on the VM's native
 filesystem. It never clears an existing checkout or installs packages itself.
 See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture and validation.
 
+### Ubuntu user-namespace policy
+
+Ubuntu can require an AppArmor permission for bubblewrap to create user
+namespaces, even when the kernel supports them. If `doctor` reports permission
+errors during namespace setup, have the machine's administrator check its
+policy. Fella never changes that policy itself.
+
+An optional [bubblewrap-only profile](contrib/apparmor/fella-bwrap) follows
+[Ubuntu's per-application approach](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces).
+On a machine without an existing bubblewrap profile, an administrator can review
+and install it once:
+
+```sh
+sudo install -m644 contrib/apparmor/fella-bwrap /etc/apparmor.d/fella-bwrap
+sudo apparmor_parser -r /etc/apparmor.d/fella-bwrap
+fella doctor
+```
+
+This grants namespace creation to **all `/usr/bin/bwrap` invocations**, not just
+Fella. If your administrator already manages a bubblewrap profile, add the
+`userns,` rule there instead of loading a competing attachment.
+Do not disable AppArmor or global namespace restrictions to make Fella work.
+CI uses this scoped helper permission; the actual tests still run without sudo.
+
 ## Coming from the old privacy prototype
 
 This is an intentional replacement, not a compatible upgrade of the old
