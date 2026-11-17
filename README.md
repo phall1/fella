@@ -177,6 +177,9 @@ sudo apparmor_parser -r /etc/apparmor.d/fella-bwrap
 fella doctor
 ```
 
+Binary releases include the same profile as `fella-bwrap.apparmor`; substitute
+that downloaded file for `contrib/apparmor/fella-bwrap` in the install command.
+
 This grants namespace creation to **all `/usr/bin/bwrap` invocations**, not just
 Fella. If your administrator already manages a bubblewrap profile, add the
 `userns,` rule there instead of loading a competing attachment.

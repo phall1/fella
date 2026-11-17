@@ -36,6 +36,7 @@ jobs:
           mkdir -p dist
           cp zig-out/bin/fella dist/fella-${{ github.ref_name }}-${{ matrix.arch }}-linux
           cp README.md LICENSE dist/
+          cp contrib/apparmor/fella-bwrap dist/fella-bwrap.apparmor
           chmod +x dist/fella-${{ github.ref_name }}-${{ matrix.arch }}-linux
 
       - name: Upload artifact
