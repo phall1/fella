@@ -81,6 +81,8 @@ lizard -l zig -C 10 src/*.zig
 
 Unit tests are portable. Actual session tests require Linux and must run as a
 normal user. CI runs both on Linux amd64 and arm64 on every PR.
+Integration tests use the release targets (baseline CPUs, glibc 2.28+) rather
+than runner-native binaries, so the distributed build path is exercised.
 Ubuntu CI loads the optional per-bubblewrap AppArmor `userns,` permission from
 `contrib/apparmor/fella-bwrap`; it does not disable global AppArmor restrictions.
 Fella never installs security policy at runtime.

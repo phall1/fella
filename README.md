@@ -134,6 +134,10 @@ and whatever programs you want to run. Tools installed inside an identity's
 `~/.local/bin` are on its PATH; programs installed only in your **host** home
 are intentionally not available.
 
+Release builds target baseline CPUs and glibc 2.28+, rather than
+inheriting the build runner's CPU features or libc version. The Linux 5.11+
+kernel requirement still applies.
+
 ## Verification
 
 ```sh
