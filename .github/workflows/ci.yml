@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-linux-gnu.2.28
+          - runner: ubuntu-24.04-arm
+            target: aarch64-linux-gnu.2.28
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install runtime/test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap bash python3 shellcheck apparmor
+      - name: Allow the distro sandbox helper to create user namespaces
+        run: |
+          if [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sysctl kernel.apparmor_restrict_unprivileged_userns
+            sudo apparmor_parser -r contrib/apparmor/fella-bwrap
+          fi
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/fella-toolchains
+          key: zig-${{ runner.arch }}-${{ hashFiles('.mise.toml', 'scripts/zig.sh') }}
+      - name: Check formatting
+        run: bash scripts/zig.sh fmt --check build.zig build.zig.zon src
+      - name: Check shell helpers
+        run: shellcheck scripts/zig.sh scripts/orb-test.sh
+      - name: Unit tests
+        run: bash scripts/zig.sh build test --summary all
+      - name: Build release binary
+        run: bash scripts/zig.sh build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+      - name: Rootless integration and interactive-shell tests
+        run: python3 tests/integration.py zig-out/bin/fella

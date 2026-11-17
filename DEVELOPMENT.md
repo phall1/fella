@@ -1,215 +1,102 @@
-# fella Development Methodology
+# Development
 
-> "A tool this sensitive cannot afford to be wrong."
+## Contract
 
-## 1. Module Lifecycle
+Build a dependable, terminal-first Linux workspace launcher. Separate application
+state without mutating the host or requiring a long-lived service.
+The vocabulary is in [CONTEXT.md](CONTEXT.md).
 
-Every module passes through **four gates** before it is considered complete.
+## Four modules, no framework
 
-```
-Spec → Implementation → Unit Tests → Integration Tests → E2E Validation → Done
-```
+- `src/Cli.zig`: pure argument parsing and name validation.
+- `src/Store.zig`: identity initialization, workspace registration, path grants.
+- `src/Session.zig`: one launch seam. A resolved `Plan` becomes a bubblewrap argv.
+- `src/main.zig`: output, diagnostics, and replacing the CLI process with bubblewrap.
 
-### Gate 1: Specification
-- Module spec written in `docs/spec/<module>.md`
-- Contains: Purpose, Interface, Failure Modes, Acceptance Criteria
-- Acceptance criteria are **testable statements**, not vague goals
-- Must be reviewed before implementation starts
+Use the standard library for files, JSON, and process execution. A single
+Linux `close_range(CLOEXEC)` primitive makes non-stdio descriptors exec-private;
+failure aborts rather than carrying ambient file/socket access into a session.
+This requires Linux 5.11+. No manual
+fork/exec wrappers, global firewall, PID registry, signal supervisor, or daemon.
+No shell interpolation: arguments after `--` remain individual arguments.
+The launch plan is the point for a future concrete policy to vary; do not add a
+plugin registry for hypothetical browsers or transports.
 
-### Gate 2: Implementation
-- Code written in `src/`
-- Follows platform abstraction (no raw platform code in engine)
-- All error paths handled explicitly (no `catch |_|`)
-- Logs structured operations via `AuditLog`
+### Ownership and lifetime
 
-### Gate 3: Unit Tests
-- Tests live in `tests/unit/<module>.zig` or inline `test {}` blocks
-- Each public function has at least one test
-- Tests cover **error paths**, not just happy paths
-- Mock external dependencies (filesystem, network, processes)
+The selected project and identity home are explicit persistent writable grants.
+The store itself is never mounted into the session. Registrations are
+versioned JSON, atomically published without replacing existing names.
+Identities are initialized in private hidden staging directories, then published
+with an atomic no-replace rename. A killed initialization does not reserve the
+requested name; retrying needs no repair. Hidden orphan staging directories are
+ignored rather than opportunistically deleted. Names cannot contain path
+separators. Atomic publication protects against partial process execution, not
+power-loss durability of application data. Broad grants of the whole host
+home, store, or system directories are rejected, including symlink targets.
+Paths are resolved and checked again at launch.
 
-### Gate 4: Integration Tests
-- Tests live in `tests/integration/`
-- Test real component interactions
-- Run in CI on every PR
-- Can use real system resources (creates temp files, starts processes)
-- Must clean up after themselves
+Each `enter` replaces the CLI with bubblewrap. Bubblewrap and the kernel own
+the process/mount lifetime and propagate the command's exit status.
+There is no stored "active" state to repair after a crash. Failures to create
+isolation fail the launch; never substitute an ordinary shell.
+Terminal signals inside the interactive shell retain foreground-job behavior.
+Direct-command Ctrl-C and PID-targeted launcher signals can hard-cancel the
+session, not gracefully forward application signals; see
+the explicit user-facing warning in README. This intentionally follows
+bubblewrap rather than adding a custom signal supervisor.
 
-### Gate 5: E2E Validation
-- Tests live in `tests/e2e/`
-- Test the tool as a black box
-- Verify actual real-world behavior (e.g., "traffic actually goes through Tor")
-- Require root / container / VM depending on test
-- Run manually before releases, run in CI on release candidates
+Runtime allocations use the process arena; they disappear on exit/exec. No
+secrets are imported from the host environment. Identity homes store ordinary
+application data, not specially encrypted or magically erasable state.
 
----
+### Explicit trade-offs
 
-## 2. Validation Criteria ("Definition of Done")
+Identity is not an OS account, forged device, browser fingerprint, or network
+identity. The namespace-local UID/GID are always 1000; the host user is unchanged.
+Concurrent sessions can intentionally share an identity home, just as two
+terminals share a normal home. Applications own their usual file locking.
+Workspaces can intentionally share a project, and therefore its contents.
+Host networking is not isolation from host services. Terminal sharing retains
+job control, not protection against hostile terminal applications.
 
-A module is **done** when:
+The system mount allowlist targets conventional FHS Linux distributions.
+NixOS, custom `/opt` toolchains, remote filesystems, graphical applications,
+resource quotas, and untrusted-code hardening are not verified targets.
+Debian/Ubuntu are the current tested baseline. Missing system programs fail
+normally; fella never installs or updates application dependencies at runtime.
 
-1. **Spec approved** — `docs/spec/<module>.md` exists and covers all acceptance criteria
-2. **Code complete** — Implementation handles all spec'd cases
-3. **Unit tests pass** — `zig test` passes with ≥80% function coverage
-4. **Integration tests pass** — Component interacts correctly with dependencies
-5. **No regressions** — Full E2E suite still passes
-6. **Platform tested** — Works on target platform (Linux x86_64, Linux aarch64)
+## Toolchain and checks
 
----
+Zig is pinned in `.mise.toml`. When upgrading it, update `minimum_zig_version`
+and the verified archive hashes in `scripts/zig.sh` together.
 
-## 3. Current Status
-
-See `docs/tracking/status.md` for live module status. Most modules are now complete through Gate 4+.
-
-| Module | Spec | Impl | Unit | Integ | E2E | Status |
-|--------|------|------|------|-------|-----|--------|
-| Core/Engine | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Platform Probe | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Identity Rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Tor Backend | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| WireGuard Backend | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
-| Chain Backend | ✅ | ✅ | ✅ | 🚧 | 🚧 | 🚧 |
-| Killswitch | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Netns Isolation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Browser Isolation | ✅ | ✅ | ✅ | ✅ | 🚧 | 🚧 |
-| Traffic Shaping | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 🚧 |
-| DPI Obfuscation | ✅ | ✅ | ⬜ | ⬜ | ⬜ | 🚧 |
-| Anti-Forensic Wipe | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Encrypted State | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Secure Memory | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-
-Legend: ✅ Complete, 🚧 In Progress, ⬜ Not started
-
----
-
-## 4. Testing Philosophy
-
-### What "Real Testing" Means
-
-**Bad test:**
-```zig
-test "hostname setter" {
-    try setHostname("test-host");
-    // Does it work? Who knows.
-}
+```sh
+bash scripts/zig.sh fmt --check build.zig build.zig.zon src
+bash scripts/zig.sh build test --summary all
+bash scripts/zig.sh build -Doptimize=ReleaseSafe
+python3 tests/integration.py zig-out/bin/fella
+lizard -l zig -C 10 src/*.zig
 ```
 
-**Good test:**
-```zig
-test "hostname setter actually changes system hostname" {
-    const original = try getHostname(arena);
-    defer restoreHostname(original) catch {};
-    
-    try setHostname("fella-test-42");
-    const actual = try getHostname(arena);
-    
-    try std.testing.expectEqualStrings("fella-test-42", actual);
-}
-```
+Unit tests are portable. Actual session tests require Linux and must run as a
+normal user. CI runs both on Linux amd64 and arm64 on every PR.
+Integration tests use the release targets (baseline CPUs, glibc 2.28+) rather
+than runner-native binaries, so the distributed build path is exercised.
+Ubuntu CI loads the optional per-bubblewrap AppArmor `userns,` permission from
+`contrib/apparmor/fella-bwrap`; it does not disable global AppArmor restrictions.
+Fella never installs security policy at runtime.
+`bash scripts/orb-test.sh <existing-machine>` performs a native Linux build and
+the full suite without modifying existing VM checkouts.
 
-**Real test (integration):**
-```bash
-# tests/integration/tor-backend.sh
-fella start
-ACTUAL_IP=$(proxychains4 curl -s https://checkip.amazonaws.com)
-TOR_CHECK=$(proxychains4 curl -s https://check.torproject.org/api/ip)
-[[ "$TOR_CHECK" == *'"IsTor":true'* ]] || exit 1
-fella stop
-```
+Add failure tests alongside behavior changes. Exercise signals and descendants
+in subprocesses, not by killing processes by name. Changes to the mount policy
+need actual inside-session tests, not just checks for strings in an argv.
 
-**E2E test:**
-```bash
-# tests/e2e/full-session.sh
-# Run in isolated VM/container
-fella init
-fella start
-# Attempt direct connection (should fail in strict mode)
-if curl --max-time 5 https://ipinfo.io 2>/dev/null; then
-    echo "FAIL: Direct connection succeeded"
-    exit 1
-fi
-# Proxied connection should work
-proxychains4 curl --max-time 15 https://ipinfo.io >/dev/null || exit 1
-# Verify Tor
-proxychains4 curl -s https://check.torproject.org/api/ip | grep -q 'IsTor.*true' || exit 1
-fella stop
-# Verify system restored
-[[ "$(hostname)" == "$ORIGINAL_HOSTNAME" ]] || exit 1
-```
+## Deliberately removed
 
----
-
-## 5. Running Tests
-
-```bash
-# Unit tests only (fast, no root, no network)
-zig build test
-
-# Integration tests (needs root, uses real system)
-sudo ./scripts/run-tests.sh --integration
-
-# E2E tests (needs isolated environment)
-sudo ./scripts/run-tests.sh --e2e
-
-# Validation gate (runs appropriate level)
-./scripts/validate.sh          # Unit
-sudo ./scripts/validate.sh     # Unit + Integration + E2E
-
-# CI mode
-./scripts/validate.sh --ci
-```
-
-### VM-based Testing (Recommended for destructive tests)
-
-fella modifies hostname, machine-id, MAC addresses, netns, and iptables. **Do not run integration tests on your daily driver.** Use the VM test harness instead:
-
-```bash
-# One-time setup: create a QEMU VM with Ubuntu, tor, wireguard, firefox
-./scripts/vm-test.sh launch
-
-# Snapshot before testing
-./scripts/vm-test.sh snapshot
-
-# Build fella in the VM and run the full integration suite
-./scripts/vm-test.sh test
-
-# SSH into the VM for manual exploration
-./scripts/vm-test.sh ssh
-
-# Restore snapshot after testing
-./scripts/vm-test.sh restore
-
-# Tear down when done
-./scripts/vm-test.sh destroy
-```
-
-**Requirements:** `qemu-system-x86_64`, `qemu-img`, `ssh`, `curl`.
-**What it does:** Downloads Ubuntu cloud image, boots a VM with cloud-init, installs deps (tor, wireguard-tools, iptables, firefox), rsyncs the source, builds, and runs tests inside the isolated VM.
-
----
-
-## 6. Acceptance Criteria Template
-
-Every module spec must answer:
-
-1. **What does it do?** (One sentence)
-2. **What are the inputs?** (Config, CLI args, system state)
-3. **What are the outputs?** (Side effects, return values, logs)
-4. **What are the failure modes?** (Each must have explicit error handling)
-5. **How do we verify it works?** (Specific test commands/expected outputs)
-6. **What are the platform constraints?** (Linux only? Needs CAP_SYS_ADMIN?)
-7. **What are the security properties?** (Privileges dropped? Logs sanitized?)
-
----
-
-## 7. Versioning & Releases
-
-- `0.1.0` — MVP: init/start/stop/rotate with Tor + basic killswitch (Linux)
-- `0.2.0` — Netns isolation, torsocks transparent proxy
-- `0.3.0` — Encrypted state, secure memory, anti-forensic wipe
-- `0.4.0` — Backend plugin architecture (Tor, WireGuard, Chain), seccomp-bpf
-- `0.5.0` — WireGuard-first, kernel traffic shaping, DPI obfuscation, browser isolation, focused 3-layer architecture
-- `0.6.0` — Persona system with persistence
-- `1.0.0` — Full feature set, stable API
-
-Release checklist in `docs/tracking/release-checklist.md`.
+Tor/WireGuard/Chain, host identifier and MAC mutation, firewall management,
+custom browser fingerprints, process masquerade, padding, hardware spoofing,
+state encryption wrappers, and secure-wipe claims are not maintained here.
+Their previous implementations and speculative roadmaps remain in Git history,
+not as dormant code that appears supported.
